@@ -137,6 +137,10 @@ type IterationContext struct {
 	// TaggedFiles maps file paths to their contents
 	TaggedFiles map[string]string `json:"tagged_files,omitempty"`
 
+	// TagPatterns stores the original tag patterns used to populate TaggedFiles
+	// e.g., ["@src/**/*.go", "@!vendor", "@main.go"]
+	TagPatterns []string `json:"tag_patterns,omitempty"`
+
 	// DirectoryTree is the codebase structure
 	DirectoryTree string `json:"directory_tree,omitempty"`
 

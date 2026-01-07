@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mpjhorner/superralph/internal/tagging"
 )
 
 // Orchestrator manages the agent loop
@@ -21,6 +22,7 @@ type Orchestrator struct {
 	claudePath string
 	session    *Session
 	debug      bool
+	tagger     *tagging.Tagger
 
 	// Callbacks for UI integration
 	onMessage  func(role, content string)
@@ -37,6 +39,7 @@ func New(workDir string) *Orchestrator {
 	return &Orchestrator{
 		workDir:    workDir,
 		claudePath: findClaudeBinary(),
+		tagger:     tagging.New(workDir),
 		session: &Session{
 			ID:       uuid.New().String(),
 			WorkDir:  workDir,
@@ -835,6 +838,40 @@ func (o *Orchestrator) AddTaggedFile(ctx *IterationContext, filePath string) err
 	}
 	ctx.TaggedFiles[relPath] = string(content)
 	return nil
+}
+
+// AddTaggedFilesFromTags processes tag strings and adds matching files to the context
+// Tags can be:
+// - @filepath - exact file path
+// - @glob/pattern/**/*.go - glob pattern
+// - @!dirname - exclusion pattern
+func (o *Orchestrator) AddTaggedFilesFromTags(ctx *IterationContext, tagStrings []string) error {
+	tags, err := o.tagger.ResolveTags(tagStrings)
+	if err != nil {
+		return fmt.Errorf("failed to resolve tags: %w", err)
+	}
+
+	filesMap, err := o.tagger.BuildTaggedFilesMap(tags)
+	if err != nil {
+		return fmt.Errorf("failed to build tagged files map: %w", err)
+	}
+
+	// Merge into the context's TaggedFiles
+	for relPath, content := range filesMap {
+		ctx.TaggedFiles[relPath] = content
+	}
+
+	return nil
+}
+
+// GetTagger returns the orchestrator's tagger for external use
+func (o *Orchestrator) GetTagger() *tagging.Tagger {
+	return o.tagger
+}
+
+// ListFilesForAutocomplete returns a list of files in the working directory for autocomplete
+func (o *Orchestrator) ListFilesForAutocomplete(maxDepth int) ([]string, error) {
+	return o.tagger.ListFiles(maxDepth)
 }
 
 // DefaultPromptUser provides a simple terminal-based user prompt

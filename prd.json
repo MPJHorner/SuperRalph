@@ -62,7 +62,7 @@
         "Add 'tag_files' action so Claude can request additional files during planning",
         "Integrate with TUI for autocomplete (see feat-008)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-005",

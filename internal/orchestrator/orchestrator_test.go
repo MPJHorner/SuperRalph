@@ -829,3 +829,244 @@ func TestIterationContextNewFields(t *testing.T) {
 		t.Error("ValidationAttempt not preserved")
 	}
 }
+
+// Tests for file tagging integration (feat-004)
+
+func TestOrchestratorHasTagger(t *testing.T) {
+	orch := New("/tmp/test")
+	if orch.tagger == nil {
+		t.Fatal("orchestrator should have a tagger")
+	}
+	if orch.GetTagger() == nil {
+		t.Fatal("GetTagger should return the tagger")
+	}
+}
+
+func TestAddTaggedFilesFromTags(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "orchestrator-tag-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test files
+	os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "util.go"), []byte("package util"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+
+	// Create a vendor directory (should be excludable)
+	vendorDir := filepath.Join(tmpDir, "vendor")
+	os.Mkdir(vendorDir, 0755)
+	os.WriteFile(filepath.Join(vendorDir, "dep.go"), []byte("package dep"), 0644)
+
+	orch := New(tmpDir)
+	ctx := &IterationContext{
+		PRDContent:  `{"name": "Test"}`,
+		TaggedFiles: make(map[string]string),
+		Iteration:   1,
+	}
+
+	// Test adding files with tags, excluding vendor
+	err = orch.AddTaggedFilesFromTags(ctx, []string{"@main.go", "@util.go", "@!vendor"})
+	if err != nil {
+		t.Fatalf("AddTaggedFilesFromTags failed: %v", err)
+	}
+
+	if _, ok := ctx.TaggedFiles["main.go"]; !ok {
+		t.Error("TaggedFiles should contain main.go")
+	}
+	if _, ok := ctx.TaggedFiles["util.go"]; !ok {
+		t.Error("TaggedFiles should contain util.go")
+	}
+	if len(ctx.TaggedFiles) != 2 {
+		t.Errorf("Expected 2 files, got %d", len(ctx.TaggedFiles))
+	}
+}
+
+func TestAddTaggedFilesFromTagsGlobPattern(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "orchestrator-glob-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test files
+	srcDir := filepath.Join(tmpDir, "src")
+	os.Mkdir(srcDir, 0755)
+	os.WriteFile(filepath.Join(srcDir, "main.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(srcDir, "util.go"), []byte("package util"), 0644)
+	os.WriteFile(filepath.Join(srcDir, "readme.txt"), []byte("readme"), 0644) // Not .go
+	os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+
+	orch := New(tmpDir)
+	ctx := &IterationContext{
+		PRDContent:  `{"name": "Test"}`,
+		TaggedFiles: make(map[string]string),
+		Iteration:   1,
+	}
+
+	// Test glob pattern
+	err = orch.AddTaggedFilesFromTags(ctx, []string{"@src/*.go"})
+	if err != nil {
+		t.Fatalf("AddTaggedFilesFromTags failed: %v", err)
+	}
+
+	// Should have both .go files
+	if len(ctx.TaggedFiles) != 2 {
+		t.Errorf("Expected 2 .go files, got %d: %v", len(ctx.TaggedFiles), ctx.TaggedFiles)
+	}
+	if _, ok := ctx.TaggedFiles["src/main.go"]; !ok {
+		t.Error("TaggedFiles should contain src/main.go")
+	}
+	if _, ok := ctx.TaggedFiles["src/util.go"]; !ok {
+		t.Error("TaggedFiles should contain src/util.go")
+	}
+}
+
+func TestAddTaggedFilesFromTagsDoubleStarGlob(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "orchestrator-doublestar-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create nested directories
+	nestedDir := filepath.Join(tmpDir, "src", "pkg", "util")
+	os.MkdirAll(nestedDir, 0755)
+
+	// Create .go files at different levels
+	os.WriteFile(filepath.Join(tmpDir, "src", "main.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "src", "pkg", "pkg.go"), []byte("package pkg"), 0644)
+	os.WriteFile(filepath.Join(nestedDir, "util.go"), []byte("package util"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+
+	orch := New(tmpDir)
+	ctx := &IterationContext{
+		PRDContent:  `{"name": "Test"}`,
+		TaggedFiles: make(map[string]string),
+		Iteration:   1,
+	}
+
+	// Test ** glob pattern
+	err = orch.AddTaggedFilesFromTags(ctx, []string{"@src/**/*.go"})
+	if err != nil {
+		t.Fatalf("AddTaggedFilesFromTags failed: %v", err)
+	}
+
+	// Should have all 3 .go files
+	if len(ctx.TaggedFiles) != 3 {
+		t.Errorf("Expected 3 .go files with **, got %d: %v", len(ctx.TaggedFiles), ctx.TaggedFiles)
+	}
+}
+
+func TestAddTaggedFilesFromTagsWithExclusion(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "orchestrator-excl-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create directories
+	testDir := filepath.Join(tmpDir, "test")
+	os.Mkdir(testDir, 0755)
+
+	// Create files
+	os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(testDir, "main_test.go"), []byte("package test"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+
+	orch := New(tmpDir)
+	ctx := &IterationContext{
+		PRDContent:  `{"name": "Test"}`,
+		TaggedFiles: make(map[string]string),
+		Iteration:   1,
+	}
+
+	// Include all .go files but exclude test directory
+	err = orch.AddTaggedFilesFromTags(ctx, []string{"@**/*.go", "@main.go", "@!test"})
+	if err != nil {
+		t.Fatalf("AddTaggedFilesFromTags failed: %v", err)
+	}
+
+	// Should only have main.go
+	if _, ok := ctx.TaggedFiles["main.go"]; !ok {
+		t.Error("TaggedFiles should contain main.go")
+	}
+	if _, ok := ctx.TaggedFiles["test/main_test.go"]; ok {
+		t.Error("TaggedFiles should NOT contain test/main_test.go (excluded)")
+	}
+}
+
+func TestListFilesForAutocomplete(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "orchestrator-autocomplete-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create files and directories
+	os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte("*.log"), 0644)
+
+	srcDir := filepath.Join(tmpDir, "src")
+	os.Mkdir(srcDir, 0755)
+	os.WriteFile(filepath.Join(srcDir, "util.go"), []byte("package src"), 0644)
+
+	orch := New(tmpDir)
+	files, err := orch.ListFilesForAutocomplete(3)
+	if err != nil {
+		t.Fatalf("ListFilesForAutocomplete failed: %v", err)
+	}
+
+	// Should contain main.go, .gitignore, src/, src/util.go
+	hasMain := false
+	hasGitignore := false
+	hasSrc := false
+
+	for _, f := range files {
+		switch f {
+		case "main.go":
+			hasMain = true
+		case ".gitignore":
+			hasGitignore = true
+		case "src/":
+			hasSrc = true
+		}
+	}
+
+	if !hasMain {
+		t.Error("files should contain main.go")
+	}
+	if !hasGitignore {
+		t.Error("files should contain .gitignore")
+	}
+	if !hasSrc {
+		t.Error("files should contain src/")
+	}
+}
+
+func TestIterationContextTagPatterns(t *testing.T) {
+	ctx := &IterationContext{
+		PRDContent:  `{"name": "Test"}`,
+		TagPatterns: []string{"@src/**/*.go", "@!vendor", "@main.go"},
+		TaggedFiles: map[string]string{"main.go": "package main"},
+		Iteration:   1,
+	}
+
+	data, err := json.Marshal(ctx)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+
+	var restored IterationContext
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if len(restored.TagPatterns) != 3 {
+		t.Errorf("Expected 3 tag patterns, got %d", len(restored.TagPatterns))
+	}
+	if restored.TagPatterns[0] != "@src/**/*.go" {
+		t.Errorf("First tag pattern should be @src/**/*.go, got %s", restored.TagPatterns[0])
+	}
+}
