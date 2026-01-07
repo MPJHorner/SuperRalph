@@ -235,10 +235,12 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 	o.debugLog("Starting Claude with prompt (%d chars)", len(prompt))
 
 	// Run Claude with the prompt, allowing it to use its tools
+	// Note: stream-json requires --verbose flag
 	cmd := exec.CommandContext(ctx, o.claudePath,
 		"-p", prompt,
 		"--permission-mode", "acceptEdits",
 		"--output-format", "stream-json",
+		"--verbose",
 	)
 	cmd.Dir = o.workDir
 
