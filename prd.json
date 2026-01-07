@@ -15,22 +15,22 @@
         "Remove session.Messages accumulation - state lives in files only",
         "Test that each iteration is independent and doesn't carry forward stale context"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-002",
       "category": "functional",
       "priority": "high",
-      "description": "Haiku-based JSON repair - when Claude returns broken JSON, use Haiku with structured output to fix it",
+      "description": "Native Claude tools instead of JSON - let Claude use its built-in Read, Write, Bash tools instead of custom JSON protocol",
       "steps": [
-        "Add Haiku model support to agent runner (claude-3-haiku or via API)",
-        "Create RepairJSON function that sends broken JSON + schema to Haiku",
-        "Use --json-schema flag for structured output guarantee",
-        "Implement retry logic: try parse -> if fail, repair with Haiku -> try parse again",
-        "Max 2 repair attempts before failing with descriptive error",
-        "Test with intentionally malformed JSON responses"
+        "Remove custom JSON response format requirement",
+        "Use --permission-mode to allow Claude to use its tools",
+        "Stream Claude's output using --output-format stream-json",
+        "Parse tool_use events to show what Claude is doing",
+        "Let Claude work naturally with its own capabilities",
+        "Test that Claude can read files, write code, and run commands"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-003",

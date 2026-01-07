@@ -181,51 +181,25 @@ Start by asking what I want to build.`
 	return o.runClaudeInteractive(ctx, prompt)
 }
 
-// RunBuild runs the build loop
+// RunBuild runs the build loop using fresh context per iteration.
+// Each Claude call gets clean, self-contained context with no conversation history accumulation.
 func (o *Orchestrator) RunBuild(ctx context.Context) error {
 	o.session.Mode = "build"
-	o.session.State = &BuildState{Phase: "reading", Iteration: 1}
+	buildState := &BuildState{Phase: "reading", Iteration: 1}
+	o.session.State = buildState
 
-	// Read current PRD to build the prompt
-	prdContent, err := os.ReadFile(filepath.Join(o.workDir, "prd.json"))
+	// Build fresh iteration context - no message accumulation
+	// State lives in files (prd.json, progress.txt), not in conversation history
+	iterCtx, err := o.BuildIterationContext(buildState.Iteration, "", nil)
 	if err != nil {
-		return fmt.Errorf("failed to read prd.json: %w", err)
+		return fmt.Errorf("failed to build iteration context: %w", err)
 	}
 
-	// Read progress if exists
-	var progressContent string
-	if data, err := os.ReadFile(filepath.Join(o.workDir, "progress.txt")); err == nil {
-		progressContent = string(data)
-	}
+	// Generate prompt from fresh context
+	prompt := iterCtx.BuildPrompt()
 
-	prompt := fmt.Sprintf(`You are implementing features from a PRD. Here is the current state:
-
-## prd.json
-%s
-
-## progress.txt
-%s
-
-## Your Task
-
-1. Look at the PRD and find the highest priority feature where "passes" is false
-2. Implement that feature
-3. Run the tests using the testCommand from the PRD
-4. If tests pass:
-   - Update prd.json to set "passes": true for the completed feature
-   - Make a git commit with a descriptive message
-   - Append a summary to progress.txt
-5. If tests fail, fix the issues and try again
-6. Continue until all features pass or you need to stop
-
-IMPORTANT RULES:
-- Tests MUST pass before any commit
-- Work on ONE feature at a time
-- Make small, incremental changes
-- Always run tests after changes
-
-Start by reading the codebase to understand the current implementation, then implement the next feature.`,
-		string(prdContent), progressContent)
+	// Clear any accumulated messages - each iteration is independent
+	o.session.Messages = []Message{}
 
 	return o.runClaudeInteractive(ctx, prompt)
 }
@@ -235,10 +209,13 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 	o.debugLog("Starting Claude with prompt (%d chars)", len(prompt))
 
 	// Run Claude with the prompt, allowing it to use its tools
-	// Note: stream-json requires --verbose flag
+	// - stream-json requires --verbose flag
+	// - allowedTools grants permission for specific tools without prompting
+	// - We allow: Read, Write, Edit, Bash for common dev commands (go, npm, git, etc.)
 	cmd := exec.CommandContext(ctx, o.claudePath,
 		"-p", prompt,
 		"--permission-mode", "acceptEdits",
+		"--allowedTools", "Read,Write,Edit,Bash(go:*),Bash(npm:*),Bash(yarn:*),Bash(pnpm:*),Bash(cargo:*),Bash(python:*),Bash(pytest:*),Bash(git:*),Bash(make:*)",
 		"--output-format", "stream-json",
 		"--verbose",
 	)
@@ -411,27 +388,122 @@ func (o *Orchestrator) debugLog(format string, args ...any) {
 	}
 }
 
-// buildFreshContext creates a clean context for each iteration
-func (o *Orchestrator) buildFreshContext() string {
-	var ctx strings.Builder
+// BuildIterationContext creates a fresh, self-contained context for a single iteration.
+// This ensures each Claude call gets clean context with no conversation history accumulation.
+func (o *Orchestrator) BuildIterationContext(iteration int, phase Phase, feature *FeatureContext) (*IterationContext, error) {
+	ctx := &IterationContext{
+		Iteration:   iteration,
+		Phase:       phase,
+		TaggedFiles: make(map[string]string),
+	}
 
 	// Read prd.json
 	prdContent, err := os.ReadFile(filepath.Join(o.workDir, "prd.json"))
-	if err == nil {
-		ctx.WriteString("## prd.json\n```json\n")
-		ctx.WriteString(string(prdContent))
-		ctx.WriteString("\n```\n\n")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read prd.json: %w", err)
 	}
+	ctx.PRDContent = string(prdContent)
 
 	// Read progress.txt if exists
 	progressContent, err := os.ReadFile(filepath.Join(o.workDir, "progress.txt"))
 	if err == nil {
-		ctx.WriteString("## progress.txt\n```\n")
-		ctx.WriteString(string(progressContent))
-		ctx.WriteString("\n```\n\n")
+		ctx.ProgressContent = string(progressContent)
 	}
 
-	return ctx.String()
+	// Generate directory tree (basic implementation - can be enhanced later)
+	tree, err := o.generateDirectoryTree(4) // max 4 levels deep
+	if err == nil {
+		ctx.DirectoryTree = tree
+	}
+
+	// Set current feature context if provided
+	if feature != nil {
+		ctx.CurrentFeature = feature
+	}
+
+	return ctx, nil
+}
+
+// generateDirectoryTree creates a textual representation of the directory structure
+func (o *Orchestrator) generateDirectoryTree(maxDepth int) (string, error) {
+	var sb strings.Builder
+	err := o.walkDir(o.workDir, "", 0, maxDepth, &sb)
+	if err != nil {
+		return "", err
+	}
+	return sb.String(), nil
+}
+
+// walkDir recursively walks the directory tree
+func (o *Orchestrator) walkDir(path, prefix string, depth, maxDepth int, sb *strings.Builder) error {
+	if depth > maxDepth {
+		return nil
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+
+	// Filter out common ignored directories/files
+	var filtered []os.DirEntry
+	for _, entry := range entries {
+		name := entry.Name()
+		// Skip hidden files, common build/dependency directories
+		if strings.HasPrefix(name, ".") && name != ".gitignore" {
+			continue
+		}
+		if name == "node_modules" || name == "vendor" || name == "__pycache__" ||
+			name == "target" || name == "build" || name == "dist" {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+
+	for i, entry := range filtered {
+		isLast := i == len(filtered)-1
+		connector := "├── "
+		if isLast {
+			connector = "└── "
+		}
+
+		sb.WriteString(prefix + connector + entry.Name())
+		if entry.IsDir() {
+			sb.WriteString("/")
+		}
+		sb.WriteString("\n")
+
+		if entry.IsDir() {
+			newPrefix := prefix + "│   "
+			if isLast {
+				newPrefix = prefix + "    "
+			}
+			o.walkDir(filepath.Join(path, entry.Name()), newPrefix, depth+1, maxDepth, sb)
+		}
+	}
+
+	return nil
+}
+
+// AddTaggedFile adds a file's contents to the iteration context
+func (o *Orchestrator) AddTaggedFile(ctx *IterationContext, filePath string) error {
+	fullPath := filePath
+	if !filepath.IsAbs(filePath) {
+		fullPath = filepath.Join(o.workDir, filePath)
+	}
+
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		return fmt.Errorf("failed to read file %s: %w", filePath, err)
+	}
+
+	// Store with relative path as key
+	relPath, err := filepath.Rel(o.workDir, fullPath)
+	if err != nil {
+		relPath = filePath
+	}
+	ctx.TaggedFiles[relPath] = string(content)
+	return nil
 }
 
 // DefaultPromptUser provides a simple terminal-based user prompt
