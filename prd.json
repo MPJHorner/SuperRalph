@@ -1,0 +1,189 @@
+{
+  "name": "SuperRalph v0.3",
+  "description": "PRD-driven agent harness with clean context per iteration, self-validating plans, parallel execution, and rich TUI. Each Claude call gets fresh context (no history accumulation). Features three-phase loop (PLAN → VALIDATE → EXECUTE), Haiku-based JSON repair, file tagging with autocomplete, and beautiful Bubble Tea interface.",
+  "testCommand": "go test ./...",
+  "features": [
+    {
+      "id": "feat-001",
+      "category": "functional",
+      "priority": "high",
+      "description": "Clean context architecture - each Claude call gets fresh, self-contained context with no conversation history accumulation",
+      "steps": [
+        "Create IterationContext struct with PRD, progress, tagged files, file tree, current feature, phase",
+        "Refactor orchestrator to build fresh context each iteration instead of appending to conversation",
+        "Context includes: prd.json content, progress.txt content, tagged file contents, directory tree",
+        "Remove session.Messages accumulation - state lives in files only",
+        "Test that each iteration is independent and doesn't carry forward stale context"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-002",
+      "category": "functional",
+      "priority": "high",
+      "description": "Haiku-based JSON repair - when Claude returns broken JSON, use Haiku with structured output to fix it",
+      "steps": [
+        "Add Haiku model support to agent runner (claude-3-haiku or via API)",
+        "Create RepairJSON function that sends broken JSON + schema to Haiku",
+        "Use --json-schema flag for structured output guarantee",
+        "Implement retry logic: try parse -> if fail, repair with Haiku -> try parse again",
+        "Max 2 repair attempts before failing with descriptive error",
+        "Test with intentionally malformed JSON responses"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-003",
+      "category": "functional",
+      "priority": "high",
+      "description": "Three-phase feature loop: PLAN -> VALIDATE -> EXECUTE with self-validation",
+      "steps": [
+        "Define Phase enum: Planning, Validating, Executing",
+        "PLAN phase: Claude proposes implementation plan with specific steps",
+        "VALIDATE phase: Claude reviews its own plan, checks for gaps, missing edge cases",
+        "If validation finds issues, loop back to PLAN with feedback (max 3 attempts)",
+        "EXECUTE phase: Claude executes the validated plan step by step",
+        "Each phase uses clean context with phase-specific prompts",
+        "Test full loop with a sample feature"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-004",
+      "category": "functional",
+      "priority": "high",
+      "description": "File tagging system - tag files from current directory with @ syntax for inclusion in context",
+      "steps": [
+        "Create FileTag struct with pattern, resolved paths, contents",
+        "Support @filepath syntax for exact files (@src/main.go)",
+        "Support @glob patterns (@src/**/*.go)",
+        "Support exclusion patterns (@!node_modules, @!vendor)",
+        "Build tagged file contents map for inclusion in context",
+        "Add 'tag_files' action so Claude can request additional files during planning",
+        "Integrate with TUI for autocomplete (see feat-008)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-005",
+      "category": "functional",
+      "priority": "high",
+      "description": "Parallel action execution - Claude can request multiple actions that execute concurrently",
+      "steps": [
+        "Add 'parallel' action type that contains array of sub-actions",
+        "Implement concurrent execution with goroutines and WaitGroup",
+        "Sensible limits: max 10 parallel reads, max 3 parallel commands, writes are sequential",
+        "Collect results from all parallel actions before returning to Claude",
+        "Handle partial failures gracefully (some succeed, some fail)",
+        "Test parallel file reads and parallel command execution"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-006",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Smart feature selection in prompts - Claude picks next feature based on priority, dependencies, state",
+      "steps": [
+        "Add optional 'depends_on' field to PRD feature schema",
+        "Update prompt to instruct Claude on feature selection logic",
+        "Selection order: skip passes:true, skip blocked by unmet dependencies, highest priority, then ID order",
+        "Claude reports which feature it selected and why in its response",
+        "Test with PRD containing dependencies and mixed priorities"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-007",
+      "category": "ui",
+      "priority": "high",
+      "description": "Rich TUI with Bubble Tea - beautiful terminal interface showing progress, phases, parallel actions",
+      "steps": [
+        "Create main TUI model with header, progress bar, phase indicator, action panel, output log",
+        "Header: project name, current feature, overall progress (X/Y features)",
+        "Phase indicator: PLANNING -> VALIDATING -> EXECUTING with visual state",
+        "Action panel: shows current/parallel actions with status (pending, running, done, failed)",
+        "Output log: scrollable area showing Claude's messages and action results",
+        "Use lipgloss for styling - make it look professional and clean",
+        "Keyboard shortcuts: q=quit, p=pause, r=resume, d=toggle debug",
+        "Test TUI renders correctly and updates in real-time"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-008",
+      "category": "ui",
+      "priority": "medium",
+      "description": "File tagging autocomplete in TUI - when typing @, show autocomplete for files in current directory",
+      "steps": [
+        "Build file index of current directory (respecting .gitignore)",
+        "When user types @, show filterable list of files/directories",
+        "Support fuzzy matching for quick selection",
+        "Show file type icons or indicators",
+        "Allow multiple selections for batch tagging",
+        "Integrate with plan command for initial context setup",
+        "Test autocomplete performance with large directories"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-009",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Codebase snapshot for context - include directory tree and key files in each iteration",
+      "steps": [
+        "Generate directory tree structure (respecting .gitignore)",
+        "Identify 'key files': package.json, go.mod, Cargo.toml, README, main entry points",
+        "Include tree + key file contents in iteration context",
+        "Configurable max depth for tree (default 4 levels)",
+        "Configurable file size limits to avoid huge files",
+        "Test with various project structures"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-010",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Native Claude tools integration - allow Claude to use Read, Write, Bash tools directly for complex operations",
+      "steps": [
+        "Add --allowedTools flag to Claude calls with appropriate permissions",
+        "Define safe tool permissions: Read(*), Write(project dir only), Bash(allowed commands)",
+        "Bash allowlist: go, npm, yarn, pnpm, cargo, python, pytest, git, make",
+        "Orchestrator still controls the loop, but Claude can use tools within a phase",
+        "Parse tool usage from Claude's response to update TUI",
+        "Test that tool permissions are enforced correctly"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-011",
+      "category": "functional",
+      "priority": "low",
+      "description": "Progress file management - append structured session summaries to progress.txt",
+      "steps": [
+        "Define progress entry format with timestamp, feature, phase, actions taken, outcome",
+        "Append entry after each feature completion or significant checkpoint",
+        "Include git commit hashes when commits are made",
+        "Progress file is read-only context for Claude (helps understand what was done)",
+        "Test progress file grows correctly across multiple features"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-012",
+      "category": "integration",
+      "priority": "low",
+      "description": "Graceful shutdown and resume - handle Ctrl+C properly and allow resuming",
+      "steps": [
+        "Catch SIGINT/SIGTERM signals",
+        "Complete current action before shutting down (don't leave partial state)",
+        "Save current feature and phase to .superralph/state.json",
+        "Add --resume flag to continue from saved state",
+        "Clear state file on successful completion",
+        "Test interrupt during each phase and verify clean resume"
+      ],
+      "passes": false
+    }
+  ]
+}

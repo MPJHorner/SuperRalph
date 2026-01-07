@@ -17,8 +17,8 @@ Thumbs.db
 *.test
 coverage.out
 
-# Example/test files
-prd.json
+# Example/test files (kept for dogfooding)
+# prd.json - tracked for self-hosted development
 progress.txt
 prd.json.backup
 
