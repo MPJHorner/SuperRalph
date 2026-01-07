@@ -275,9 +275,6 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 	buf := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buf, 10*1024*1024)
 
-	var lastContent strings.Builder
-	inContent := false
-
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -287,11 +284,7 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 		var event map[string]any
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			// Not JSON, might be plain text - show it
-			if o.onOutput != nil {
-				o.onOutput(line)
-			} else {
-				fmt.Println(line)
-			}
+			fmt.Println(line)
 			continue
 		}
 
@@ -299,60 +292,83 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 
 		switch eventType {
 		case "system":
-			// System messages (like mode changes) - show in debug
-			if msg, ok := event["message"].(string); ok {
-				o.debugLog("System: %s", msg)
+			// System init message - show in debug
+			if subtype, ok := event["subtype"].(string); ok {
+				o.debugLog("System: %s", subtype)
 			}
 
 		case "assistant":
-			// Assistant turn started
-			o.debugLog("Assistant turn started")
-
-		case "content_block_start":
-			// Content block starting
-			inContent = true
-			lastContent.Reset()
-
-		case "content_block_delta":
-			// Streaming content
-			if delta, ok := event["delta"].(map[string]any); ok {
-				if text, ok := delta["text"].(string); ok {
-					fmt.Print(text)
-					lastContent.WriteString(text)
+			// Assistant message with content
+			if msg, ok := event["message"].(map[string]any); ok {
+				if content, ok := msg["content"].([]any); ok {
+					for _, block := range content {
+						if blockMap, ok := block.(map[string]any); ok {
+							blockType, _ := blockMap["type"].(string)
+							switch blockType {
+							case "text":
+								if text, ok := blockMap["text"].(string); ok {
+									fmt.Println(text)
+								}
+							case "tool_use":
+								if name, ok := blockMap["name"].(string); ok {
+									fmt.Printf("\n  [Using tool: %s]\n", name)
+									if input, ok := blockMap["input"].(map[string]any); ok {
+										// Show some context about the tool use
+										if cmd, ok := input["command"].(string); ok {
+											fmt.Printf("  > %s\n", cmd)
+										}
+										if path, ok := input["file_path"].(string); ok {
+											fmt.Printf("  > %s\n", path)
+										}
+									}
+								}
+							}
+						}
+					}
 				}
 			}
 
-		case "content_block_stop":
-			// Content block ended
-			if inContent {
-				fmt.Println()
-				inContent = false
+		case "user":
+			// Tool results coming back
+			if msg, ok := event["message"].(map[string]any); ok {
+				if content, ok := msg["content"].([]any); ok {
+					for _, block := range content {
+						if blockMap, ok := block.(map[string]any); ok {
+							if blockMap["type"] == "tool_result" {
+								// Show truncated tool result
+								if content, ok := blockMap["content"].(string); ok {
+									lines := strings.Split(content, "\n")
+									if len(lines) > 10 {
+										for _, line := range lines[:5] {
+											fmt.Printf("    %s\n", line)
+										}
+										fmt.Printf("    ... (%d more lines)\n", len(lines)-5)
+									} else {
+										for _, line := range lines {
+											fmt.Printf("    %s\n", line)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
 			}
-
-		case "tool_use":
-			// Claude is using a tool
-			if name, ok := event["name"].(string); ok {
-				fmt.Printf("\n  [Tool: %s]\n", name)
-			}
-
-		case "tool_result":
-			// Tool returned a result
-			o.debugLog("Tool result received")
-
-		case "message_stop":
-			// Message complete
-			elapsed := time.Since(startTime).Seconds()
-			fmt.Printf("\n  [Message complete: %.1fs]\n", elapsed)
 
 		case "result":
 			// Final result
 			elapsed := time.Since(startTime).Seconds()
-			if subtype, ok := event["subtype"].(string); ok {
-				fmt.Printf("\n  [%s: %.1fs]\n", subtype, elapsed)
+			subtype, _ := event["subtype"].(string)
+
+			if result, ok := event["result"].(string); ok && result != "" {
+				fmt.Printf("\n%s\n", result)
 			}
-			if cost, ok := event["cost_usd"].(float64); ok {
-				o.debugLog("Cost: $%.4f", cost)
+
+			fmt.Printf("\n  [%s: %.1fs", subtype, elapsed)
+			if cost, ok := event["total_cost_usd"].(float64); ok {
+				fmt.Printf(", $%.4f", cost)
 			}
+			fmt.Println("]")
 
 		case "error":
 			// Error occurred
