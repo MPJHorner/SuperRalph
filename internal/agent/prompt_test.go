@@ -62,7 +62,7 @@ func TestBuildPlanPrompt(t *testing.T) {
 		"high",
 		"medium",
 		"low",
-		"What are you building",
+		"Write tool", // Must use Write tool to create file
 	}
 
 	for _, part := range expectedParts {

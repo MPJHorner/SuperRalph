@@ -164,20 +164,25 @@ func (r *Runner) Run(ctx context.Context, prompt string) error {
 }
 
 // RunInteractive runs Claude in interactive mode (for planning)
-func (r *Runner) RunInteractive(ctx context.Context, prompt string) error {
+func (r *Runner) RunInteractive(ctx context.Context, systemPrompt string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	defer cancel()
 
-	// For interactive mode, we use a different approach
-	// We pass the prompt as the initial message
+	// For interactive mode:
+	// - Use --system-prompt to give Claude the planning instructions
+	// - Pass an initial user message to start the conversation
+	// - DO NOT use -p/--print so it stays interactive
+	// - Use --allowedTools to let Claude write files
 	r.cmd = exec.CommandContext(ctx, r.claudePath,
-		"-p", prompt,
+		"--system-prompt", systemPrompt,
+		"--allowedTools", "Write,Edit,Read,Bash",
+		"What are you building? Tell me about your project - what's the main purpose, who will use it, and what problem does it solve?",
 	)
 	r.cmd.Dir = r.workDir
 	r.cmd.Env = os.Environ()
 
-	// Connect stdin/stdout/stderr directly to terminal
+	// Connect stdin/stdout/stderr directly to terminal for interactive session
 	r.cmd.Stdin = os.Stdin
 	r.cmd.Stdout = os.Stdout
 	r.cmd.Stderr = os.Stderr

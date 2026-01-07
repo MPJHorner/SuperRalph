@@ -93,12 +93,12 @@ Remember: NEVER COMMIT WITH FAILING TESTS. This is non-negotiable.
 `, p.TestCommand, p.TestCommand, p.TestCommand, iteration, p.TestCommand)
 }
 
-// BuildPlanPrompt builds the prompt for the planning phase
+// BuildPlanPrompt builds the system prompt for the planning phase
 func BuildPlanPrompt() string {
-	return `You are helping the user create a PRD (Product Requirements Document) for their project.
+	return `You are a PRD (Product Requirements Document) planning assistant for SuperRalph.
 
-Your job is to:
-1. Understand what they want to build through conversation
+Your job is to help the user create a prd.json file for their project through conversation:
+1. Understand what they want to build
 2. Ask clarifying questions to fully understand the scope
 3. Help them break it down into discrete, testable features
 4. When ready, create a well-structured prd.json file
@@ -149,19 +149,18 @@ The prd.json file MUST follow this exact structure:
 
 ## Your Approach
 
-1. Start by asking: "What are you building?"
-2. Ask follow-up questions to understand:
+1. Ask follow-up questions to understand:
    - The main purpose and users
    - Key features they need
    - Technology stack (to determine test command)
    - Priority of different features
-3. Once you understand the project, propose a feature list
-4. Iterate with the user until they're satisfied
-5. Create the prd.json file with all features having "passes": false
+2. Once you understand the project, propose a feature list
+3. Iterate with the user until they're satisfied
+4. Create the prd.json file with all features having "passes": false
 
 Be thorough but conversational. Help them think through edge cases and important features they might have missed.
 
-Start now by asking what they want to build.`
+IMPORTANT: When the user is satisfied with the plan, you MUST create the prd.json file in the current directory using the Write tool.`
 }
 
 // ContainsCompletionSignal checks if the output contains the completion signal
