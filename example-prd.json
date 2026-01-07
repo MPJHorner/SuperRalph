@@ -1,0 +1,72 @@
+{
+  "name": "Example Project",
+  "description": "A sample project to demonstrate Ralph",
+  "testCommand": "go test ./...",
+  "features": [
+    {
+      "id": "feat-001",
+      "category": "functional",
+      "priority": "high",
+      "description": "User can create a new account",
+      "steps": [
+        "Navigate to signup page",
+        "Fill in email and password",
+        "Submit registration form",
+        "Verify account is created in database"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-002",
+      "category": "functional",
+      "priority": "high",
+      "description": "User can log in with credentials",
+      "steps": [
+        "Navigate to login page",
+        "Enter valid email and password",
+        "Submit login form",
+        "Verify user is redirected to dashboard"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-003",
+      "category": "ui",
+      "priority": "medium",
+      "description": "Dashboard shows user statistics",
+      "steps": [
+        "Log in as authenticated user",
+        "Navigate to dashboard",
+        "Verify statistics cards are displayed",
+        "Verify data updates in real-time"
+      ],
+      "passes": true
+    },
+    {
+      "id": "feat-004",
+      "category": "security",
+      "priority": "high",
+      "description": "Passwords are securely hashed",
+      "steps": [
+        "Create a new user account",
+        "Check database for password field",
+        "Verify password is hashed (not plaintext)",
+        "Verify hash uses bcrypt or similar"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-005",
+      "category": "integration",
+      "priority": "low",
+      "description": "Email notifications sent on signup",
+      "steps": [
+        "Create a new user account",
+        "Check email service logs",
+        "Verify welcome email was queued",
+        "Verify email contains correct content"
+      ],
+      "passes": false
+    }
+  ]
+}
