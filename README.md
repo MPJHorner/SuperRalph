@@ -4,39 +4,19 @@ PRD-driven agent harness for long-running Claude development sessions.
 
 SuperRalph validates PRD (Product Requirements Document) files and orchestrates Claude to implement features incrementally with test-gated commits.
 
-## Inspiration & Attribution
+## Table of Contents
 
-This project is inspired by and builds upon:
-
-- **[Matt Pocock's Ralph](https://x.com/mattpocockuk/status/2007924876548637089)** - The original concept of using a PRD-driven loop with Claude to implement features incrementally. Matt's approach of running Claude in a loop with `@prd.json` and `@progress.txt` was the foundation for this tool.
-
-- **[Anthropic's "Effective Harnesses for Long-Running Agents"](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)** - Research on how to build effective agent harnesses that work across multiple context windows. Key insights include:
-  - Using an initializer agent to set up the environment
-  - Working on one feature at a time (incremental progress)
-  - Leaving clear artifacts for the next session
-  - Test-gated commits to ensure clean state
-
-### Libraries Used
-
-Built with excellent Go libraries from [Charm](https://charm.sh/):
-
-- **[Bubble Tea](https://github.com/charmbracelet/bubbletea)** - TUI framework based on The Elm Architecture
-- **[Bubbles](https://github.com/charmbracelet/bubbles)** - Common TUI components (spinners, progress bars)
-- **[Lip Gloss](https://github.com/charmbracelet/lipgloss)** - Style definitions for terminal UIs
-- **[Huh](https://github.com/charmbracelet/huh)** - Interactive terminal forms and prompts
-
-Also uses:
-- **[Cobra](https://github.com/spf13/cobra)** - CLI framework
-
-## Features
-
-- **PRD Validation** - Ensures your prd.json has the correct structure
-- **Interactive Planning** - Claude helps you create a well-structured PRD
-- **Test-Gated Commits** - Tests MUST pass before any code is committed (non-negotiable)
-- **Live TUI** - Monitor progress with a beautiful terminal interface
-- **Automatic Retries** - Failed iterations retry up to 3 times
-- **Progress Tracking** - Detailed progress.txt log for session continuity
-- **macOS/Linux Notifications** - Get notified when builds complete
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [PRD Format](#prd-format)
+- [Progress File](#progress-file)
+- [TUI Controls](#tui-controls)
+- [Requirements](#requirements)
+- [Philosophy](#philosophy)
+- [Inspiration & Attribution](#inspiration--attribution)
+- [Development](#development)
+- [License](#license)
 
 ## Installation
 
@@ -66,43 +46,26 @@ make build
 make install  # Installs to /usr/local/bin (may need sudo)
 ```
 
-Or install to your user directory (no sudo needed):
-
-```bash
-make install-user  # Installs to ~/go/bin
-```
-
 ### Manual Download
 
 Download the latest binary for your platform from [Releases](https://github.com/MPJHorner/SuperRalph/releases).
 
-### Add to your shell (if needed)
-
-If installed to a non-standard location, add to your `~/.zshrc` (or `~/.bashrc`):
+## Quick Start
 
 ```bash
-# If installed to ~/go/bin
-export PATH="$HOME/go/bin:$PATH"
+# 1. Create a PRD interactively with Claude
+superralph plan
 
-# Or create an alias to a custom location
-alias superralph="/path/to/superralph"
-```
+# 2. Validate your PRD
+superralph validate
 
-Then reload your shell:
-
-```bash
-source ~/.zshrc
-```
-
-Verify installation:
-
-```bash
-superralph --help
+# 3. Start building features
+superralph build
 ```
 
 ## Usage
 
-### Create a PRD
+### `superralph plan` - Create a PRD
 
 Start an interactive session with Claude to create your PRD:
 
@@ -114,25 +77,41 @@ Claude will:
 1. Ask what you're building
 2. Help you think through features
 3. Ask clarifying questions
-4. Create a well-structured prd.json
+4. Create a well-structured `prd.json`
 
-### Validate your PRD
+### `superralph validate` - Validate PRD
 
-Check that your prd.json is valid:
+Check that your `prd.json` is valid:
 
 ```bash
 superralph validate
 ```
 
-### View Status
+Output:
+```
+✓ prd.json is valid
 
-See live progress of your PRD:
+  Project: My App
+  Test Command: npm test
+  Features: 12 features (3 passing, 9 remaining)
+
+  By Category:
+    functional   2/5
+    ui           1/4
+    integration  0/3
+
+  Next: feat-004 "User authentication"
+```
+
+### `superralph status` - Live Status
+
+See live-updating progress of your PRD:
 
 ```bash
 superralph status
 ```
 
-### Build Features
+### `superralph build` - Build Features
 
 Run the Claude agent loop to implement features:
 
@@ -144,9 +123,15 @@ You'll be prompted for the number of iterations. The agent will:
 1. Pick the highest-priority incomplete feature
 2. Implement the feature
 3. Run tests (must pass!)
-4. Update prd.json and progress.txt
+4. Update `prd.json` and `progress.txt`
 5. Commit changes
-6. Repeat
+6. Repeat until done or iterations exhausted
+
+**Key behaviors:**
+- Tests MUST pass before any commit (non-negotiable)
+- Retries up to 3 times on failure
+- Auto-initializes git if not present
+- Sends notification on completion
 
 ## PRD Format
 
@@ -181,7 +166,7 @@ Create a `prd.json` in your project root:
 |-------|----------|-------------|
 | `name` | Yes | Project name |
 | `description` | Yes | What the project does |
-| `testCommand` | Yes | Command to run tests (e.g., `go test ./...`, `npm test`) |
+| `testCommand` | Yes | Command to run tests (e.g., `go test ./...`, `npm test`, `pytest`) |
 | `features` | Yes | Array of features |
 
 ### Feature Fields
@@ -243,19 +228,41 @@ Iteration: 1
 
 ## Requirements
 
-- Go 1.21+ (for building)
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-code/cli-usage) installed and configured
 - macOS or Linux
+- Go 1.21+ (only if building from source)
 
 ## Philosophy
 
-SuperRalph is built on principles from Anthropic's research on [effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents):
+SuperRalph is built on these principles:
 
 1. **Incremental Progress** - Work on one feature at a time
 2. **Clean State** - Always leave the codebase in a working state
 3. **Test-Gated Commits** - Never commit with failing tests
 4. **Progress Documentation** - Leave clear notes for the next session
 5. **Structured PRD** - Use JSON for reliable feature tracking
+
+## Inspiration & Attribution
+
+This project is inspired by and builds upon:
+
+- **[Matt Pocock's Ralph](https://x.com/mattpocockuk/status/2007924876548637089)** - The original concept of using a PRD-driven loop with Claude to implement features incrementally. Matt's approach of running Claude in a loop with `@prd.json` and `@progress.txt` was the foundation for this tool.
+
+- **[Anthropic's "Effective Harnesses for Long-Running Agents"](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)** - Research on how to build effective agent harnesses that work across multiple context windows. Key insights include:
+  - Using an initializer agent to set up the environment
+  - Working on one feature at a time (incremental progress)
+  - Leaving clear artifacts for the next session
+  - Test-gated commits to ensure clean state
+
+### Libraries Used
+
+Built with excellent Go libraries from [Charm](https://charm.sh/):
+
+- [Bubble Tea](https://github.com/charmbracelet/bubbletea) - TUI framework
+- [Bubbles](https://github.com/charmbracelet/bubbles) - TUI components
+- [Lip Gloss](https://github.com/charmbracelet/lipgloss) - Terminal styling
+- [Huh](https://github.com/charmbracelet/huh) - Interactive forms
+- [Cobra](https://github.com/spf13/cobra) - CLI framework
 
 ## Development
 
