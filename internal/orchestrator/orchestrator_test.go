@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -1068,5 +1069,121 @@ func TestIterationContextTagPatterns(t *testing.T) {
 	}
 	if restored.TagPatterns[0] != "@src/**/*.go" {
 		t.Errorf("First tag pattern should be @src/**/*.go, got %s", restored.TagPatterns[0])
+	}
+}
+
+// Tests for parallel action execution (feat-005)
+
+func TestOrchestratorHasParallelExecutor(t *testing.T) {
+	orch := New("/tmp/test")
+	if orch.parallel == nil {
+		t.Fatal("orchestrator should have a parallel executor")
+	}
+	if orch.GetParallelExecutor() == nil {
+		t.Fatal("GetParallelExecutor should return the parallel executor")
+	}
+}
+
+func TestOrchestratorSetParallelLimits(t *testing.T) {
+	orch := New("/tmp/test")
+	orch.SetParallelLimits(ParallelLimits{MaxReads: 5, MaxCommands: 2})
+
+	pe := orch.GetParallelExecutor()
+	if pe.limits.MaxReads != 5 {
+		t.Errorf("Expected MaxReads=5, got %d", pe.limits.MaxReads)
+	}
+	if pe.limits.MaxCommands != 2 {
+		t.Errorf("Expected MaxCommands=2, got %d", pe.limits.MaxCommands)
+	}
+}
+
+func TestOrchestratorExecuteParallelReads(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "orch-parallel-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test files
+	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("content1"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("content2"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+
+	orch := New(tmpDir)
+
+	actions := []SubAction{
+		{Type: ActionReadFiles, Params: ActionParams{Paths: []string{"file1.txt"}}},
+		{Type: ActionReadFiles, Params: ActionParams{Paths: []string{"file2.txt"}}},
+	}
+
+	ctx := context.Background()
+	result := orch.ExecuteParallel(ctx, actions)
+
+	if !result.AllSucceeded {
+		t.Errorf("Expected all reads to succeed, got %d failures", result.FailedCount)
+		for _, r := range result.Results {
+			if !r.Success {
+				t.Logf("Failed: %v - %s", r.Action.Params.Paths, r.Error)
+			}
+		}
+	}
+	if len(result.Results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(result.Results))
+	}
+}
+
+func TestOrchestratorExecuteParallelMixed(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "orch-parallel-mixed-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create initial file
+	os.WriteFile(filepath.Join(tmpDir, "existing.txt"), []byte("existing"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+
+	orch := New(tmpDir)
+
+	actions := []SubAction{
+		{Type: ActionReadFiles, Params: ActionParams{Paths: []string{"existing.txt"}}},
+		{Type: ActionWriteFile, Params: ActionParams{Path: "new.txt", Content: "new content"}},
+		{Type: ActionRunCommand, Params: ActionParams{Command: "echo hello"}},
+	}
+
+	ctx := context.Background()
+	result := orch.ExecuteParallel(ctx, actions)
+
+	if !result.AllSucceeded {
+		t.Errorf("Expected all actions to succeed, got %d failures", result.FailedCount)
+	}
+
+	// Verify the file was written
+	content, err := os.ReadFile(filepath.Join(tmpDir, "new.txt"))
+	if err != nil {
+		t.Errorf("Failed to read new.txt: %v", err)
+	} else if string(content) != "new content" {
+		t.Errorf("Expected 'new content', got %q", string(content))
+	}
+}
+
+func TestActionParallelType(t *testing.T) {
+	// Verify ActionParallel is a valid action type
+	if ActionParallel != "parallel" {
+		t.Errorf("Expected ActionParallel='parallel', got %q", ActionParallel)
+	}
+
+	// Verify it's in the list of valid actions
+	validActions := map[Action]bool{
+		ActionAskUser:    true,
+		ActionReadFiles:  true,
+		ActionWriteFile:  true,
+		ActionRunCommand: true,
+		ActionDone:       true,
+		ActionParallel:   true,
+	}
+
+	if !validActions[ActionParallel] {
+		t.Error("ActionParallel should be a valid action")
 	}
 }

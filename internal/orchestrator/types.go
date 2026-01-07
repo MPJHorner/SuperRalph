@@ -15,6 +15,7 @@ const (
 	ActionWriteFile  Action = "write_file"  // Write a file
 	ActionRunCommand Action = "run_command" // Run a shell command
 	ActionDone       Action = "done"        // Task is complete
+	ActionParallel   Action = "parallel"    // Execute multiple actions in parallel
 )
 
 // Response is the structured response from Claude

@@ -23,6 +23,7 @@ type Orchestrator struct {
 	session    *Session
 	debug      bool
 	tagger     *tagging.Tagger
+	parallel   *ParallelExecutor
 
 	// Callbacks for UI integration
 	onMessage  func(role, content string)
@@ -40,6 +41,7 @@ func New(workDir string) *Orchestrator {
 		workDir:    workDir,
 		claudePath: findClaudeBinary(),
 		tagger:     tagging.New(workDir),
+		parallel:   NewParallelExecutor(workDir),
 		session: &Session{
 			ID:       uuid.New().String(),
 			WorkDir:  workDir,
@@ -867,6 +869,22 @@ func (o *Orchestrator) AddTaggedFilesFromTags(ctx *IterationContext, tagStrings 
 // GetTagger returns the orchestrator's tagger for external use
 func (o *Orchestrator) GetTagger() *tagging.Tagger {
 	return o.tagger
+}
+
+// GetParallelExecutor returns the orchestrator's parallel executor for external use
+func (o *Orchestrator) GetParallelExecutor() *ParallelExecutor {
+	return o.parallel
+}
+
+// SetParallelLimits sets the concurrency limits for parallel execution
+func (o *Orchestrator) SetParallelLimits(limits ParallelLimits) *Orchestrator {
+	o.parallel.SetLimits(limits)
+	return o
+}
+
+// ExecuteParallel executes a group of actions in parallel
+func (o *Orchestrator) ExecuteParallel(ctx context.Context, actions []SubAction) ParallelResult {
+	return o.parallel.Execute(ctx, ParallelAction{Actions: actions})
 }
 
 // ListFilesForAutocomplete returns a list of files in the working directory for autocomplete

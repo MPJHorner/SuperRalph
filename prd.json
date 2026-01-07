@@ -77,7 +77,7 @@
         "Handle partial failures gracefully (some succeed, some fail)",
         "Test parallel file reads and parallel command execution"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-006",
