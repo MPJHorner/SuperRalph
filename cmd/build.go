@@ -153,6 +153,11 @@ func runBuild(cmd *cobra.Command, args []string) {
 				fmt.Println(thinkingStyle.Render("Thinking: " + thinking))
 			}
 		}).
+		OnDebug(func(msg string) {
+			if buildDebug {
+				fmt.Println(dimStyle.Render("[debug] " + msg))
+			}
+		}).
 		OnAction(func(action orchestrator.Action, params orchestrator.ActionParams) {
 			switch action {
 			case orchestrator.ActionReadFiles:

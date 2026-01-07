@@ -25,6 +25,7 @@ type Orchestrator struct {
 	onAction   func(action Action, params ActionParams)
 	onState    func(state any)
 	onThinking func(thinking string)
+	onDebug    func(msg string)
 	promptUser func(question string) (string, error)
 }
 
@@ -103,6 +104,12 @@ func (o *Orchestrator) OnThinking(fn func(thinking string)) *Orchestrator {
 	return o
 }
 
+// OnDebug sets the callback for debug messages
+func (o *Orchestrator) OnDebug(fn func(msg string)) *Orchestrator {
+	o.onDebug = fn
+	return o
+}
+
 // SetPromptUser sets the function to prompt the user
 func (o *Orchestrator) SetPromptUser(fn func(question string) (string, error)) *Orchestrator {
 	o.promptUser = fn
@@ -154,26 +161,94 @@ func (o *Orchestrator) RunBuild(ctx context.Context) error {
 	o.session.Mode = "build"
 	o.session.State = &BuildState{Phase: "reading", Iteration: 1}
 
-	systemPrompt := o.buildBuildSystemPrompt()
-	o.session.Messages = append(o.session.Messages, Message{
-		Role:    "system",
-		Content: systemPrompt,
-	})
+	// Build fresh context for this iteration
+	context := o.buildFreshContext()
 
-	// Start with initial prompt
-	initialPrompt := "Read the prd.json and progress.txt to understand the current state, then begin implementing."
-	return o.runLoop(ctx, initialPrompt)
+	// Start with the build prompt
+	return o.runBuildLoop(ctx, context)
 }
 
-// runLoop is the main agent loop
-func (o *Orchestrator) runLoop(ctx context.Context, initialPrompt string) error {
-	// Add initial user message to kick things off
-	o.session.Messages = append(o.session.Messages, Message{
-		Role:    "user",
-		Content: initialPrompt,
-	})
+// buildFreshContext creates a clean context for each iteration (no history accumulation)
+func (o *Orchestrator) buildFreshContext() string {
+	var ctx strings.Builder
 
-	maxIterations := 100 // Safety limit
+	// Read prd.json
+	prdContent, err := os.ReadFile(filepath.Join(o.workDir, "prd.json"))
+	if err == nil {
+		ctx.WriteString("## prd.json\n```json\n")
+		ctx.WriteString(string(prdContent))
+		ctx.WriteString("\n```\n\n")
+	}
+
+	// Read progress.txt if exists
+	progressContent, err := os.ReadFile(filepath.Join(o.workDir, "progress.txt"))
+	if err == nil {
+		ctx.WriteString("## progress.txt\n```\n")
+		ctx.WriteString(string(progressContent))
+		ctx.WriteString("\n```\n\n")
+	}
+
+	// Add directory tree (simple version)
+	ctx.WriteString("## Directory Structure\n```\n")
+	tree := o.getDirectoryTree(o.workDir, "", 3)
+	ctx.WriteString(tree)
+	ctx.WriteString("```\n\n")
+
+	return ctx.String()
+}
+
+// getDirectoryTree returns a simple directory tree
+func (o *Orchestrator) getDirectoryTree(dir string, prefix string, maxDepth int) string {
+	if maxDepth <= 0 {
+		return ""
+	}
+
+	var result strings.Builder
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+
+	// Filter out common ignored directories
+	ignored := map[string]bool{
+		".git": true, "node_modules": true, "vendor": true,
+		".idea": true, ".vscode": true, "__pycache__": true,
+		"build": true, "dist": true, ".superralph": true,
+	}
+
+	for i, entry := range entries {
+		if ignored[entry.Name()] || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		isLast := i == len(entries)-1
+		connector := "├── "
+		if isLast {
+			connector = "└── "
+		}
+
+		result.WriteString(prefix + connector + entry.Name())
+		if entry.IsDir() {
+			result.WriteString("/")
+		}
+		result.WriteString("\n")
+
+		if entry.IsDir() {
+			newPrefix := prefix + "│   "
+			if isLast {
+				newPrefix = prefix + "    "
+			}
+			result.WriteString(o.getDirectoryTree(filepath.Join(dir, entry.Name()), newPrefix, maxDepth-1))
+		}
+	}
+
+	return result.String()
+}
+
+// runBuildLoop runs the build loop with fresh context each iteration
+func (o *Orchestrator) runBuildLoop(ctx context.Context, freshContext string) error {
+	maxIterations := 100
+
 	for i := 0; i < maxIterations; i++ {
 		select {
 		case <-ctx.Done():
@@ -181,8 +256,13 @@ func (o *Orchestrator) runLoop(ctx context.Context, initialPrompt string) error 
 		default:
 		}
 
+		o.debugLog("=== Iteration %d ===", i+1)
+
+		// Build the prompt with fresh context each time
+		prompt := o.buildBuildPrompt(freshContext, i+1)
+
 		// Call Claude
-		response, err := o.callClaude(ctx)
+		response, err := o.callClaudeWithRetry(ctx, prompt)
 		if err != nil {
 			return fmt.Errorf("claude call failed: %w", err)
 		}
@@ -197,17 +277,6 @@ func (o *Orchestrator) runLoop(ctx context.Context, initialPrompt string) error 
 			o.onMessage("assistant", response.Message)
 		}
 
-		// Add assistant message to history
-		o.session.Messages = append(o.session.Messages, Message{
-			Role:    "assistant",
-			Content: response.Message,
-		})
-
-		// Handle state update
-		if response.State != nil && o.onState != nil {
-			o.onState(response.State)
-		}
-
 		// Handle action
 		if o.onAction != nil {
 			o.onAction(response.Action, response.ActionParams)
@@ -219,13 +288,77 @@ func (o *Orchestrator) runLoop(ctx context.Context, initialPrompt string) error 
 			return fmt.Errorf("action failed: %w", err)
 		}
 
+		o.debugLog("Action: %s, Result length: %d", response.Action, len(result))
+
 		if done {
-			// Save final session
+			return nil
+		}
+
+		// Rebuild fresh context for next iteration (includes any file changes)
+		freshContext = o.buildFreshContext()
+
+		// Add the result of the last action to context
+		if result != "" {
+			freshContext += "\n## Last Action Result\n" + result + "\n"
+		}
+	}
+
+	return fmt.Errorf("max iterations reached")
+}
+
+// runLoop is the main agent loop (used for planning)
+func (o *Orchestrator) runLoop(ctx context.Context, initialPrompt string) error {
+	o.session.Messages = append(o.session.Messages, Message{
+		Role:    "user",
+		Content: initialPrompt,
+	})
+
+	maxIterations := 100
+	for i := 0; i < maxIterations; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Build prompt from session messages
+		var promptBuilder strings.Builder
+		for _, msg := range o.session.Messages {
+			promptBuilder.WriteString(fmt.Sprintf("[%s]\n%s\n\n", msg.Role, msg.Content))
+		}
+
+		response, err := o.callClaudeWithRetry(ctx, promptBuilder.String())
+		if err != nil {
+			return fmt.Errorf("claude call failed: %w", err)
+		}
+
+		if o.debug && response.Thinking != "" && o.onThinking != nil {
+			o.onThinking(response.Thinking)
+		}
+
+		if response.Message != "" && o.onMessage != nil {
+			o.onMessage("assistant", response.Message)
+		}
+
+		o.session.Messages = append(o.session.Messages, Message{
+			Role:    "assistant",
+			Content: response.Message,
+		})
+
+		if o.onAction != nil {
+			o.onAction(response.Action, response.ActionParams)
+		}
+
+		result, done, err := o.executeAction(ctx, response.Action, response.ActionParams)
+		if err != nil {
+			return fmt.Errorf("action failed: %w", err)
+		}
+
+		if done {
 			_ = o.SaveSession()
 			return nil
 		}
 
-		// Add result as user message for next iteration
 		if result != "" {
 			o.session.Messages = append(o.session.Messages, Message{
 				Role:    "user",
@@ -233,97 +366,132 @@ func (o *Orchestrator) runLoop(ctx context.Context, initialPrompt string) error 
 			})
 		}
 
-		// Save session after each iteration
 		_ = o.SaveSession()
 	}
 
 	return fmt.Errorf("max iterations reached")
 }
 
-// responseSchema is the JSON schema for structured responses
-const responseSchema = `{
-	"type": "object",
-	"properties": {
-		"thinking": {"type": "string"},
-		"action": {"type": "string", "enum": ["ask_user", "read_files", "write_file", "run_command", "done"]},
-		"action_params": {
-			"type": "object",
-			"properties": {
-				"question": {"type": "string"},
-				"paths": {"type": "array", "items": {"type": "string"}},
-				"path": {"type": "string"},
-				"content": {"type": "string"},
-				"command": {"type": "string"}
-			}
-		},
-		"message": {"type": "string"},
-		"state": {"type": "object"}
-	},
-	"required": ["action"]
-}`
-
-// callClaude calls Claude with the current conversation
-func (o *Orchestrator) callClaude(ctx context.Context) (*Response, error) {
-	// Build the full prompt from conversation history
-	var promptBuilder strings.Builder
-	for _, msg := range o.session.Messages {
-		promptBuilder.WriteString(fmt.Sprintf("[%s]\n%s\n\n", msg.Role, msg.Content))
+// callClaudeWithRetry calls Claude and retries with Haiku repair if JSON is broken
+func (o *Orchestrator) callClaudeWithRetry(ctx context.Context, prompt string) (*Response, error) {
+	// First attempt with main model
+	rawResponse, err := o.callClaudeRaw(ctx, prompt)
+	if err != nil {
+		return nil, err
 	}
 
-	prompt := promptBuilder.String()
+	o.debugLog("Raw response length: %d", len(rawResponse))
 
-	// Call Claude with structured output using json-schema
+	// Try to parse the response
+	response, err := o.parseResponse(rawResponse)
+	if err == nil {
+		return response, nil
+	}
+
+	o.debugLog("JSON parse failed, attempting Haiku repair: %v", err)
+
+	// Try to repair with Haiku
+	repaired, repairErr := o.repairJSONWithHaiku(ctx, rawResponse)
+	if repairErr != nil {
+		// Return original error if repair fails
+		return nil, fmt.Errorf("failed to parse response and repair failed: %w (repair error: %v)", err, repairErr)
+	}
+
+	// Try parsing the repaired JSON
+	response, err = o.parseResponse(repaired)
+	if err != nil {
+		return nil, fmt.Errorf("repair succeeded but still invalid JSON: %w", err)
+	}
+
+	o.debugLog("Haiku repair succeeded")
+	return response, nil
+}
+
+// callClaudeRaw calls Claude and returns the raw text response
+func (o *Orchestrator) callClaudeRaw(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, o.claudePath,
 		"-p", prompt,
-		"--output-format", "json",
-		"--json-schema", responseSchema,
+		"--output-format", "text",
 	)
 	cmd.Dir = o.workDir
 
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("claude exited with error: %s", string(exitErr.Stderr))
+			return "", fmt.Errorf("claude exited with error: %s", string(exitErr.Stderr))
 		}
-		return nil, err
+		return "", err
 	}
 
-	// The output should be JSON with a "result" field containing the actual response
-	// Format: {"type":"result","subtype":"success","cost_usd":...,"result":"..."}
-	var claudeOutput struct {
-		Type   string `json:"type"`
-		Result string `json:"result"`
-	}
-	if err := json.Unmarshal(output, &claudeOutput); err != nil {
-		// Try to extract JSON directly from output
-		return o.parseResponseFromText(string(output))
+	return string(output), nil
+}
+
+// parseResponse tries to parse a Response from Claude's output
+func (o *Orchestrator) parseResponse(text string) (*Response, error) {
+	// Try to extract JSON from the text
+	jsonStr := extractJSON(text)
+	if jsonStr == "" {
+		return nil, fmt.Errorf("no JSON found in response")
 	}
 
-	// Parse the result field which should be our structured response
 	var response Response
-	if err := json.Unmarshal([]byte(claudeOutput.Result), &response); err != nil {
-		// Claude might return the response directly in result as text
-		// Try to extract JSON from it
-		return o.parseResponseFromText(claudeOutput.Result)
+	if err := json.Unmarshal([]byte(jsonStr), &response); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+
+	// Validate required fields
+	if response.Action == "" {
+		return nil, fmt.Errorf("missing required field: action")
 	}
 
 	return &response, nil
 }
 
-// parseResponseFromText tries to extract our Response from text that might contain JSON
-func (o *Orchestrator) parseResponseFromText(text string) (*Response, error) {
-	extracted := extractJSON(text)
-	if extracted != "" {
-		var response Response
-		if err := json.Unmarshal([]byte(extracted), &response); err == nil {
-			return &response, nil
-		}
+// repairJSONWithHaiku uses Haiku to fix broken JSON
+func (o *Orchestrator) repairJSONWithHaiku(ctx context.Context, brokenResponse string) (string, error) {
+	repairPrompt := fmt.Sprintf(`You are a JSON repair assistant. Fix the following text to be valid JSON matching this schema:
+
+{
+  "thinking": "string (optional)",
+  "action": "read_files" | "write_file" | "run_command" | "done",
+  "action_params": {
+    "paths": ["array of file paths"] (for read_files),
+    "path": "file path" (for write_file),
+    "content": "file content" (for write_file),
+    "command": "shell command" (for run_command)
+  },
+  "message": "string (optional)"
+}
+
+Respond with ONLY the fixed JSON, no explanation, no markdown code blocks, just raw JSON.
+
+Text to fix:
+%s`, brokenResponse)
+
+	cmd := exec.CommandContext(ctx, o.claudePath,
+		"-p", repairPrompt,
+		"--output-format", "text",
+		"--model", "haiku",
+	)
+	cmd.Dir = o.workDir
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("haiku repair call failed: %w", err)
 	}
-	return nil, fmt.Errorf("failed to parse response from text: %s", text)
+
+	return strings.TrimSpace(string(output)), nil
 }
 
 // extractJSON tries to extract JSON from a string that might contain markdown
 func extractJSON(s string) string {
+	s = strings.TrimSpace(s)
+
+	// If it starts with {, try to parse directly
+	if strings.HasPrefix(s, "{") {
+		return extractJSONObject(s)
+	}
+
 	// Try to find JSON in code blocks
 	if start := strings.Index(s, "```json"); start != -1 {
 		start += 7
@@ -331,8 +499,13 @@ func extractJSON(s string) string {
 			return strings.TrimSpace(s[start : start+end])
 		}
 	}
+
 	if start := strings.Index(s, "```"); start != -1 {
 		start += 3
+		// Skip any language identifier on the same line
+		if newline := strings.Index(s[start:], "\n"); newline != -1 {
+			start += newline + 1
+		}
 		if end := strings.Index(s[start:], "```"); end != -1 {
 			candidate := strings.TrimSpace(s[start : start+end])
 			if strings.HasPrefix(candidate, "{") {
@@ -340,22 +513,51 @@ func extractJSON(s string) string {
 			}
 		}
 	}
-	// Try to find raw JSON
+
+	// Try to find raw JSON object
 	if start := strings.Index(s, "{"); start != -1 {
-		// Find matching closing brace
-		depth := 0
-		for i := start; i < len(s); i++ {
-			switch s[i] {
-			case '{':
-				depth++
-			case '}':
-				depth--
-				if depth == 0 {
-					return s[start : i+1]
-				}
+		return extractJSONObject(s[start:])
+	}
+
+	return ""
+}
+
+// extractJSONObject extracts a JSON object by matching braces
+func extractJSONObject(s string) string {
+	if !strings.HasPrefix(s, "{") {
+		return ""
+	}
+
+	depth := 0
+	inString := false
+	escape := false
+
+	for i, c := range s {
+		if escape {
+			escape = false
+			continue
+		}
+		if c == '\\' && inString {
+			escape = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		if c == '{' {
+			depth++
+		} else if c == '}' {
+			depth--
+			if depth == 0 {
+				return s[:i+1]
 			}
 		}
 	}
+
 	return ""
 }
 
@@ -387,7 +589,6 @@ func (o *Orchestrator) executeAction(ctx context.Context, action Action, params 
 
 	case ActionWriteFile:
 		fullPath := filepath.Join(o.workDir, params.Path)
-		// Ensure directory exists
 		dir := filepath.Dir(fullPath)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Sprintf("Failed to create directory: %s", err), false, nil
@@ -417,121 +618,84 @@ func (o *Orchestrator) executeAction(ctx context.Context, action Action, params 
 	}
 }
 
+// debugLog logs a debug message
+func (o *Orchestrator) debugLog(format string, args ...any) {
+	if o.debug && o.onDebug != nil {
+		o.onDebug(fmt.Sprintf(format, args...))
+	}
+}
+
+// buildBuildPrompt creates the prompt for a build iteration
+func (o *Orchestrator) buildBuildPrompt(context string, iteration int) string {
+	return fmt.Sprintf(`You are a code implementation agent. Your task is to implement features from the PRD.
+
+## CRITICAL: Response Format
+
+You MUST respond with ONLY a valid JSON object. No explanations, no markdown, just JSON:
+
+{
+  "thinking": "your reasoning here",
+  "action": "read_files",
+  "action_params": {
+    "paths": ["file1.go", "file2.go"]
+  },
+  "message": "Status message for user"
+}
+
+Valid actions:
+- "read_files" with "paths": ["file1", "file2"] - Read files to understand code
+- "write_file" with "path": "file.go" and "content": "..." - Write/update a file
+- "run_command" with "command": "go test ./..." - Run a shell command
+- "done" - All features are complete
+
+## Current Context
+
+%s
+
+## Iteration: %d
+
+## Your Task
+
+1. Look at prd.json - find the highest priority feature with "passes": false
+2. Implement that ONE feature
+3. Run tests to verify (test command is in prd.json)
+4. If tests pass, commit and update prd.json to mark the feature as passes: true
+5. If all features pass, use action "done"
+
+## Rules
+
+- TESTS MUST PASS before committing
+- Work on ONE feature at a time
+- Make small, incremental changes
+- Always run tests after changes
+
+Respond with JSON only:`, context, iteration)
+}
+
 // buildPlanSystemPrompt builds the system prompt for planning
 func (o *Orchestrator) buildPlanSystemPrompt() string {
-	return `You are a PRD (Product Requirements Document) planning assistant for SuperRalph.
+	return `You are a PRD planning assistant. Help create a prd.json file.
 
-Your job is to help the user create a prd.json file through a structured conversation.
+## CRITICAL: Response Format
 
-## Response Format
-
-You MUST respond with valid JSON in this exact format:
+You MUST respond with ONLY a valid JSON object:
 
 {
-  "thinking": "Your internal reasoning about what to do next",
-  "action": "ask_user|read_files|write_file|done",
+  "thinking": "your reasoning",
+  "action": "ask_user",
   "action_params": {
-    "question": "Your question to the user",
-    "paths": ["file1.go", "src/main.ts"],
-    "path": "prd.json",
-    "content": "file contents"
+    "question": "What are you building?"
   },
-  "message": "Message to display to the user",
-  "state": {
-    "phase": "gathering|proposing|refining|complete",
-    "draft_prd": { ... }
-  }
+  "message": "Let's plan your project."
 }
 
-## Actions
+Valid actions:
+- "ask_user" with "question": "..." - Ask the user something
+- "read_files" with "paths": [...] - Read existing code
+- "write_file" with "path" and "content" - Write prd.json
+- "done" - Planning complete
 
-- ask_user: Ask the user a question. Put the question in action_params.question
-- read_files: Read files from the codebase to understand it. Put paths in action_params.paths
-- write_file: Write a file. Put path and content in action_params
-- done: Planning is complete
-
-## PRD Schema
-
-The prd.json file MUST follow this structure:
-
-{
-  "name": "Project Name",
-  "description": "Description",
-  "testCommand": "npm test",
-  "features": [
-    {
-      "id": "feat-001",
-      "category": "functional|ui|integration|performance|security",
-      "priority": "high|medium|low",
-      "description": "What this feature does",
-      "steps": ["Step 1", "Step 2"],
-      "passes": false
-    }
-  ]
-}
-
-## Planning Flow
-
-1. GATHERING: Ask about the project, explore existing code
-2. PROPOSING: Propose a feature list based on understanding
-3. REFINING: Iterate based on user feedback  
-4. COMPLETE: Write prd.json and finish
-
-Be thorough. Ask clarifying questions. Look at existing code to understand the project.
-When the user is satisfied, write the prd.json file and set action to "done".`
-}
-
-// buildBuildSystemPrompt builds the system prompt for building
-func (o *Orchestrator) buildBuildSystemPrompt() string {
-	return `You are a code implementation agent for SuperRalph.
-
-Your job is to implement features from the PRD, ensuring all tests pass before committing.
-
-## Response Format
-
-You MUST respond with valid JSON in this exact format:
-
-{
-  "thinking": "Your internal reasoning",
-  "action": "read_files|write_file|run_command|done",
-  "action_params": {
-    "paths": ["prd.json", "src/main.go"],
-    "path": "src/feature.go",
-    "content": "file contents",
-    "command": "go test ./..."
-  },
-  "message": "Status message for the user",
-  "state": {
-    "phase": "reading|implementing|testing|committing|complete",
-    "current_feature": "feat-001",
-    "tests_passing": false
-  }
-}
-
-## Actions
-
-- read_files: Read files to understand codebase
-- write_file: Write/update a file
-- run_command: Run a shell command (tests, git, etc.)
-- done: All features complete
-
-## CRITICAL RULES
-
-1. TESTS MUST PASS before any commit
-2. Work on ONE feature at a time (highest priority first)
-3. Run tests after each change
-4. Only commit when tests pass
-5. Update prd.json to mark features as passes: true
-
-## Workflow
-
-1. READ: Read prd.json and progress.txt
-2. IMPLEMENT: Write code for the highest priority feature with passes: false
-3. TEST: Run the test command
-4. If tests fail: fix and repeat
-5. COMMIT: git add, git commit with descriptive message
-6. UPDATE: Set passes: true in prd.json, append to progress.txt
-7. Repeat for next feature or set action to "done" if all complete`
+Respond with JSON only.`
 }
 
 // DefaultPromptUser provides a simple terminal-based user prompt
