@@ -40,10 +40,27 @@ Also uses:
 
 ## Installation
 
+### Quick Install (Recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MPJHorner/SuperRalph/main/install.sh | sh
+```
+
+This will:
+- Detect your OS and architecture (macOS/Linux, amd64/arm64)
+- Download the latest release
+- Install to `/usr/local/bin` (may prompt for sudo)
+
+To install to a custom directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MPJHorner/SuperRalph/main/install.sh | sh -s -- ~/bin
+```
+
 ### From Source
 
 ```bash
-git clone https://github.com/mpjhorner/SuperRalph
+git clone https://github.com/MPJHorner/SuperRalph
 cd SuperRalph
 make build
 make install  # Installs to /usr/local/bin (may need sudo)
@@ -55,14 +72,15 @@ Or install to your user directory (no sudo needed):
 make install-user  # Installs to ~/go/bin
 ```
 
-### Add to your shell
+### Manual Download
 
-Add one of these to your `~/.zshrc` (or `~/.bashrc`):
+Download the latest binary for your platform from [Releases](https://github.com/MPJHorner/SuperRalph/releases).
+
+### Add to your shell (if needed)
+
+If installed to a non-standard location, add to your `~/.zshrc` (or `~/.bashrc`):
 
 ```bash
-# If installed to /usr/local/bin (already in PATH for most systems)
-# Nothing needed!
-
 # If installed to ~/go/bin
 export PATH="$HOME/go/bin:$PATH"
 
