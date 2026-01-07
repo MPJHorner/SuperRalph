@@ -414,43 +414,114 @@ func (o *Orchestrator) callClaudeWithRetry(ctx context.Context, prompt string) (
 func (o *Orchestrator) callClaudeRaw(ctx context.Context, prompt string) (string, error) {
 	o.debugLog("Executing Claude CLI (prompt: %d chars)...", len(prompt))
 
-	// Print waiting message to stdout so user knows we're working
-	fmt.Print("  Waiting for Claude")
-
 	cmd := exec.CommandContext(ctx, o.claudePath,
 		"-p", prompt,
-		"--output-format", "text",
+		"--output-format", "stream-json",
 	)
 	cmd.Dir = o.workDir
 
-	// Run with a spinner effect
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				fmt.Print(".")
+	// Get stdout pipe to stream output
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to get stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start claude: %w", err)
+	}
+
+	// Read and display streaming output
+	var result strings.Builder
+	var finalResult string
+	startTime := time.Now()
+
+	fmt.Println("  Claude is working...")
+
+	scanner := bufio.NewScanner(stdout)
+	// Increase buffer for large JSON lines
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			o.debugLog("Failed to parse event: %v", err)
+			continue
+		}
+
+		eventType, _ := event["type"].(string)
+
+		switch eventType {
+		case "assistant":
+			// Assistant message started
+			elapsed := time.Since(startTime).Seconds()
+			o.debugLog("Assistant started (%.1fs)", elapsed)
+
+		case "content_block_start":
+			// Content block starting
+			fmt.Print("  > ")
+
+		case "content_block_delta":
+			// Streaming text content
+			if delta, ok := event["delta"].(map[string]any); ok {
+				if text, ok := delta["text"].(string); ok {
+					fmt.Print(text)
+					result.WriteString(text)
+				}
+			}
+
+		case "content_block_stop":
+			// Content block ended
+			fmt.Println()
+
+		case "message_stop":
+			// Message complete
+			elapsed := time.Since(startTime).Seconds()
+			o.debugLog("Message complete (%.1fs)", elapsed)
+
+		case "result":
+			// Final result with cost info
+			if r, ok := event["result"].(string); ok {
+				finalResult = r
+			}
+			if cost, ok := event["cost_usd"].(float64); ok {
+				o.debugLog("Cost: $%.4f", cost)
+			}
+			elapsed := time.Since(startTime).Seconds()
+			fmt.Printf("  [%.1fs]\n", elapsed)
+
+		case "error":
+			if errData, ok := event["error"].(map[string]any); ok {
+				msg, _ := errData["message"].(string)
+				return "", fmt.Errorf("claude error: %s", msg)
 			}
 		}
-	}()
+	}
 
-	output, err := cmd.Output()
-	close(done)
-	fmt.Println() // newline after dots
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("error reading claude output: %w", err)
+	}
 
-	if err != nil {
+	if err := cmd.Wait(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("claude exited with error: %s", string(exitErr.Stderr))
+			return "", fmt.Errorf("claude exited with code %d", exitErr.ExitCode())
 		}
 		return "", err
 	}
 
-	o.debugLog("Claude returned %d bytes", len(output))
-	return string(output), nil
+	// Prefer the final result if available
+	if finalResult != "" {
+		o.debugLog("Using final result (%d bytes)", len(finalResult))
+		return finalResult, nil
+	}
+
+	o.debugLog("Using streamed content (%d bytes)", result.Len())
+	return result.String(), nil
 }
 
 // parseResponse tries to parse a Response from Claude's output
