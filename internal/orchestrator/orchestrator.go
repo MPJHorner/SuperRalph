@@ -204,6 +204,337 @@ func (o *Orchestrator) RunBuild(ctx context.Context) error {
 	return o.runClaudeInteractive(ctx, prompt)
 }
 
+// RunFeatureLoop runs the three-phase loop (PLAN -> VALIDATE -> EXECUTE) for a single feature.
+// Returns the Claude output from the execution phase.
+func (o *Orchestrator) RunFeatureLoop(ctx context.Context, feature *FeatureContext, config *PhaseConfig) (string, error) {
+	if config == nil {
+		config = &PhaseConfig{MaxValidationAttempts: 3}
+	}
+	if config.MaxValidationAttempts <= 0 {
+		config.MaxValidationAttempts = 3
+	}
+
+	var plan string
+	var validationFeedback string
+	var validationAttempt int
+
+	// Phase loop: PLAN -> VALIDATE -> (loop back or) EXECUTE
+	for validationAttempt < config.MaxValidationAttempts {
+		validationAttempt++
+
+		// === PLANNING PHASE ===
+		o.debugLog("Starting PLANNING phase (attempt %d/%d)", validationAttempt, config.MaxValidationAttempts)
+		fmt.Printf("\n  [Phase: PLANNING (attempt %d/%d)]\n", validationAttempt, config.MaxValidationAttempts)
+
+		planCtx, err := o.BuildIterationContext(validationAttempt, PhasePlanning, feature)
+		if err != nil {
+			return "", fmt.Errorf("failed to build planning context: %w", err)
+		}
+		planCtx.ValidationFeedback = validationFeedback
+		planCtx.ValidationAttempt = validationAttempt
+
+		planOutput, err := o.runClaudeWithOutput(ctx, planCtx.BuildPrompt())
+		if err != nil {
+			return "", fmt.Errorf("planning phase failed: %w", err)
+		}
+
+		// Extract the plan from the output
+		plan = extractPlan(planOutput)
+		if plan == "" {
+			// If no explicit plan block, use the whole output
+			plan = planOutput
+		}
+
+		// === VALIDATION PHASE ===
+		o.debugLog("Starting VALIDATION phase")
+		fmt.Println("\n  [Phase: VALIDATING]")
+
+		validateCtx, err := o.BuildIterationContext(validationAttempt, PhaseValidating, feature)
+		if err != nil {
+			return "", fmt.Errorf("failed to build validation context: %w", err)
+		}
+		validateCtx.PreviousPlan = plan
+
+		validationOutput, err := o.runClaudeWithOutput(ctx, validateCtx.BuildPrompt())
+		if err != nil {
+			return "", fmt.Errorf("validation phase failed: %w", err)
+		}
+
+		// Parse the validation result
+		validationResult := parseValidation(validationOutput)
+
+		if validationResult.Valid {
+			o.debugLog("Plan validated successfully")
+			fmt.Println("  [Validation: PASSED]")
+			break
+		}
+
+		// Validation failed - prepare feedback for next planning attempt
+		validationFeedback = validationResult.Feedback
+		if validationFeedback == "" && len(validationResult.Issues) > 0 {
+			validationFeedback = "Issues found:\n"
+			for _, issue := range validationResult.Issues {
+				validationFeedback += "- " + issue + "\n"
+			}
+		}
+
+		o.debugLog("Validation failed, feedback: %s", validationFeedback)
+		fmt.Printf("  [Validation: FAILED - %d issues]\n", len(validationResult.Issues))
+
+		if validationAttempt >= config.MaxValidationAttempts {
+			return "", fmt.Errorf("validation failed after %d attempts: %s", config.MaxValidationAttempts, validationFeedback)
+		}
+	}
+
+	// === EXECUTION PHASE ===
+	o.debugLog("Starting EXECUTION phase")
+	fmt.Println("\n  [Phase: EXECUTING]")
+
+	executeCtx, err := o.BuildIterationContext(validationAttempt, PhaseExecuting, feature)
+	if err != nil {
+		return "", fmt.Errorf("failed to build execution context: %w", err)
+	}
+	executeCtx.PreviousPlan = plan
+
+	executionOutput, err := o.runClaudeWithOutput(ctx, executeCtx.BuildPrompt())
+	if err != nil {
+		return "", fmt.Errorf("execution phase failed: %w", err)
+	}
+
+	fmt.Println("  [Phase: COMPLETE]")
+	return executionOutput, nil
+}
+
+// runClaudeWithOutput runs Claude and returns the output as a string
+func (o *Orchestrator) runClaudeWithOutput(ctx context.Context, prompt string) (string, error) {
+	o.debugLog("Running Claude with prompt (%d chars)", len(prompt))
+
+	cmd := exec.CommandContext(ctx, o.claudePath,
+		"-p", prompt,
+		"--permission-mode", "acceptEdits",
+		"--allowedTools", "Read,Write,Edit,Bash(go:*),Bash(npm:*),Bash(yarn:*),Bash(pnpm:*),Bash(cargo:*),Bash(python:*),Bash(pytest:*),Bash(git:*),Bash(make:*)",
+		"--output-format", "stream-json",
+		"--verbose",
+	)
+	cmd.Dir = o.workDir
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to get stdout pipe: %w", err)
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to get stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start claude: %w", err)
+	}
+
+	startTime := time.Now()
+
+	// Read stderr in background
+	var stderrBuf strings.Builder
+	go func() {
+		io.Copy(&stderrBuf, stderr)
+	}()
+
+	// Collect output
+	var outputBuilder strings.Builder
+	scanner := bufio.NewScanner(stdout)
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			fmt.Println(line)
+			continue
+		}
+
+		eventType, _ := event["type"].(string)
+
+		switch eventType {
+		case "assistant":
+			if msg, ok := event["message"].(map[string]any); ok {
+				if content, ok := msg["content"].([]any); ok {
+					for _, block := range content {
+						if blockMap, ok := block.(map[string]any); ok {
+							blockType, _ := blockMap["type"].(string)
+							switch blockType {
+							case "text":
+								if text, ok := blockMap["text"].(string); ok {
+									fmt.Println(text)
+									outputBuilder.WriteString(text)
+									outputBuilder.WriteString("\n")
+								}
+							case "tool_use":
+								if name, ok := blockMap["name"].(string); ok {
+									fmt.Printf("\n  [Using tool: %s]\n", name)
+									if input, ok := blockMap["input"].(map[string]any); ok {
+										if cmd, ok := input["command"].(string); ok {
+											fmt.Printf("  > %s\n", cmd)
+										}
+										if path, ok := input["file_path"].(string); ok {
+											fmt.Printf("  > %s\n", path)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+		case "user":
+			if msg, ok := event["message"].(map[string]any); ok {
+				if content, ok := msg["content"].([]any); ok {
+					for _, block := range content {
+						if blockMap, ok := block.(map[string]any); ok {
+							if blockMap["type"] == "tool_result" {
+								if content, ok := blockMap["content"].(string); ok {
+									lines := strings.Split(content, "\n")
+									if len(lines) > 10 {
+										for _, line := range lines[:5] {
+											fmt.Printf("    %s\n", line)
+										}
+										fmt.Printf("    ... (%d more lines)\n", len(lines)-5)
+									} else {
+										for _, line := range lines {
+											fmt.Printf("    %s\n", line)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+		case "result":
+			elapsed := time.Since(startTime).Seconds()
+			subtype, _ := event["subtype"].(string)
+
+			if result, ok := event["result"].(string); ok && result != "" {
+				fmt.Printf("\n%s\n", result)
+				outputBuilder.WriteString(result)
+			}
+
+			fmt.Printf("\n  [%s: %.1fs", subtype, elapsed)
+			if cost, ok := event["total_cost_usd"].(float64); ok {
+				fmt.Printf(", $%.4f", cost)
+			}
+			fmt.Println("]")
+
+		case "error":
+			if errData, ok := event["error"].(map[string]any); ok {
+				if msg, ok := errData["message"].(string); ok {
+					return "", fmt.Errorf("claude error: %s", msg)
+				}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("error reading claude output: %w", err)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		if stderrBuf.Len() > 0 {
+			o.debugLog("Claude stderr: %s", stderrBuf.String())
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if exitErr.ExitCode() != 0 {
+				o.debugLog("Claude exited with code %d", exitErr.ExitCode())
+			}
+		}
+	}
+
+	return outputBuilder.String(), nil
+}
+
+// extractPlan extracts the plan from Claude's output (between <plan> tags)
+func extractPlan(output string) string {
+	startTag := "<plan>"
+	endTag := "</plan>"
+
+	startIdx := strings.Index(output, startTag)
+	if startIdx == -1 {
+		return ""
+	}
+
+	endIdx := strings.Index(output[startIdx:], endTag)
+	if endIdx == -1 {
+		return ""
+	}
+
+	return strings.TrimSpace(output[startIdx+len(startTag) : startIdx+endIdx])
+}
+
+// parseValidation parses the validation result from Claude's output
+func parseValidation(output string) ValidationResult {
+	result := ValidationResult{Valid: true} // Default to valid if parsing fails
+
+	startTag := "<validation>"
+	endTag := "</validation>"
+
+	startIdx := strings.Index(output, startTag)
+	if startIdx == -1 {
+		// No validation block found - assume valid
+		return result
+	}
+
+	endIdx := strings.Index(output[startIdx:], endTag)
+	if endIdx == -1 {
+		return result
+	}
+
+	validationText := output[startIdx+len(startTag) : startIdx+endIdx]
+
+	// Parse the validation text
+	lines := strings.Split(validationText, "\n")
+	var issues []string
+	var feedbackLines []string
+	inFeedback := false
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if strings.HasPrefix(line, "valid:") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "valid:"))
+			result.Valid = strings.ToLower(value) == "true"
+		} else if strings.HasPrefix(line, "issues:") {
+			// Issues section started
+			continue
+		} else if strings.HasPrefix(line, "- ") && !inFeedback {
+			// An issue item
+			issues = append(issues, strings.TrimPrefix(line, "- "))
+		} else if strings.HasPrefix(line, "feedback:") {
+			inFeedback = true
+			feedback := strings.TrimSpace(strings.TrimPrefix(line, "feedback:"))
+			if feedback != "" {
+				feedbackLines = append(feedbackLines, feedback)
+			}
+		} else if inFeedback {
+			feedbackLines = append(feedbackLines, line)
+		}
+	}
+
+	result.Issues = issues
+	result.Feedback = strings.Join(feedbackLines, "\n")
+
+	return result
+}
+
 // runClaudeInteractive runs Claude in interactive mode, streaming output
 func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) error {
 	o.debugLog("Starting Claude with prompt (%d chars)", len(prompt))

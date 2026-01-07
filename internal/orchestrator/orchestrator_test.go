@@ -179,8 +179,9 @@ func TestIterationContextBuildPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "## Current Phase: planning") {
 		t.Error("prompt should contain current phase")
 	}
-	if !strings.Contains(prompt, "## Your Task") {
-		t.Error("prompt should contain task instructions")
+	// When phase is set, we get phase-specific instructions instead of generic task instructions
+	if !strings.Contains(prompt, "Planning Phase Instructions") {
+		t.Error("prompt should contain planning phase instructions when phase is planning")
 	}
 }
 
@@ -524,5 +525,307 @@ func TestIterationIndependence(t *testing.T) {
 	}
 	if ctx2.Phase != PhaseExecuting {
 		t.Errorf("Second context Phase should be executing, got %q", ctx2.Phase)
+	}
+}
+
+// Tests for three-phase loop (feat-003)
+
+func TestExtractPlan(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		want   string
+	}{
+		{
+			name:  "valid plan block",
+			input: "Some preamble\n<plan>\n## Implementation Plan\n\n### Steps\n1. Do something\n</plan>\nSome epilogue",
+			want:  "## Implementation Plan\n\n### Steps\n1. Do something",
+		},
+		{
+			name:  "no plan block",
+			input: "Just some regular output without a plan",
+			want:  "",
+		},
+		{
+			name:  "empty plan block",
+			input: "<plan></plan>",
+			want:  "",
+		},
+		{
+			name:  "unclosed plan block",
+			input: "<plan>Some content without closing tag",
+			want:  "",
+		},
+		{
+			name:  "plan with whitespace",
+			input: "<plan>  \n  Trimmed content  \n  </plan>",
+			want:  "Trimmed content",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractPlan(tt.input)
+			if got != tt.want {
+				t.Errorf("extractPlan() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantValid bool
+		wantIssues int
+		wantFeedback bool
+	}{
+		{
+			name:      "valid plan",
+			input:     "<validation>\nvalid: true\nissues:\nfeedback:\n</validation>",
+			wantValid: true,
+			wantIssues: 0,
+			wantFeedback: false,
+		},
+		{
+			name:      "invalid plan with issues",
+			input:     "<validation>\nvalid: false\nissues:\n- Missing tests\n- No error handling\nfeedback: Please add tests and error handling\n</validation>",
+			wantValid: false,
+			wantIssues: 2,
+			wantFeedback: true,
+		},
+		{
+			name:      "no validation block - defaults to valid",
+			input:     "Some output without validation block",
+			wantValid: true,
+			wantIssues: 0,
+			wantFeedback: false,
+		},
+		{
+			name:      "valid true case insensitive",
+			input:     "<validation>\nvalid: TRUE\n</validation>",
+			wantValid: true,
+			wantIssues: 0,
+			wantFeedback: false,
+		},
+		{
+			name:      "valid false explicit",
+			input:     "<validation>\nvalid: false\n</validation>",
+			wantValid: false,
+			wantIssues: 0,
+			wantFeedback: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseValidation(tt.input)
+			if result.Valid != tt.wantValid {
+				t.Errorf("parseValidation().Valid = %v, want %v", result.Valid, tt.wantValid)
+			}
+			if len(result.Issues) != tt.wantIssues {
+				t.Errorf("parseValidation().Issues count = %d, want %d", len(result.Issues), tt.wantIssues)
+			}
+			hasFeedback := result.Feedback != ""
+			if hasFeedback != tt.wantFeedback {
+				t.Errorf("parseValidation() has feedback = %v, want %v", hasFeedback, tt.wantFeedback)
+			}
+		})
+	}
+}
+
+func TestValidationResultSerialization(t *testing.T) {
+	result := ValidationResult{
+		Valid:    false,
+		Issues:   []string{"Issue 1", "Issue 2"},
+		Feedback: "Please fix these issues",
+	}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+
+	var restored ValidationResult
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if restored.Valid != result.Valid {
+		t.Error("Valid not preserved")
+	}
+	if len(restored.Issues) != len(result.Issues) {
+		t.Error("Issues not preserved")
+	}
+	if restored.Feedback != result.Feedback {
+		t.Error("Feedback not preserved")
+	}
+}
+
+func TestPhaseConfigDefaults(t *testing.T) {
+	config := PhaseConfig{}
+	if config.MaxValidationAttempts != 0 {
+		t.Errorf("Default MaxValidationAttempts should be 0 (unset), got %d", config.MaxValidationAttempts)
+	}
+
+	config = PhaseConfig{MaxValidationAttempts: 5}
+	if config.MaxValidationAttempts != 5 {
+		t.Errorf("MaxValidationAttempts should be 5, got %d", config.MaxValidationAttempts)
+	}
+}
+
+func TestIterationContextWithPlanAndFeedback(t *testing.T) {
+	ctx := &IterationContext{
+		PRDContent:         `{"name": "Test"}`,
+		Phase:              PhasePlanning,
+		ValidationFeedback: "Missing error handling",
+		ValidationAttempt:  2,
+		Iteration:          2,
+	}
+
+	prompt := ctx.BuildPrompt()
+
+	// Should contain validation feedback
+	if !strings.Contains(prompt, "Missing error handling") {
+		t.Error("prompt should contain validation feedback")
+	}
+	if !strings.Contains(prompt, "Attempt 2/3") {
+		t.Error("prompt should contain attempt number")
+	}
+}
+
+func TestIterationContextValidatingPhase(t *testing.T) {
+	ctx := &IterationContext{
+		PRDContent:   `{"name": "Test"}`,
+		Phase:        PhaseValidating,
+		PreviousPlan: "## My Plan\n\n1. Do something",
+		Iteration:    1,
+	}
+
+	prompt := ctx.BuildPrompt()
+
+	// Should contain the plan to validate
+	if !strings.Contains(prompt, "## My Plan") {
+		t.Error("prompt should contain the plan to validate")
+	}
+	if !strings.Contains(prompt, "Validation Checklist") {
+		t.Error("prompt should contain validation checklist")
+	}
+}
+
+func TestIterationContextExecutingPhase(t *testing.T) {
+	ctx := &IterationContext{
+		PRDContent:   `{"name": "Test"}`,
+		Phase:        PhaseExecuting,
+		PreviousPlan: "## My Validated Plan\n\n1. Step one",
+		Iteration:    1,
+	}
+
+	prompt := ctx.BuildPrompt()
+
+	// Should contain the plan to execute
+	if !strings.Contains(prompt, "## My Validated Plan") {
+		t.Error("prompt should contain the validated plan")
+	}
+	if !strings.Contains(prompt, "Execution Rules") {
+		t.Error("prompt should contain execution rules")
+	}
+	if !strings.Contains(prompt, "execution_complete") {
+		t.Error("prompt should contain completion signal instructions")
+	}
+}
+
+func TestBuildPlanningInstructions(t *testing.T) {
+	ctx := &IterationContext{
+		PRDContent: `{"name": "Test"}`,
+		Phase:      PhasePlanning,
+		Iteration:  1,
+	}
+
+	prompt := ctx.BuildPrompt()
+
+	// Should contain planning-specific instructions
+	if !strings.Contains(prompt, "Planning Phase Instructions") {
+		t.Error("prompt should contain planning phase instructions")
+	}
+	if !strings.Contains(prompt, "<plan>") {
+		t.Error("prompt should contain plan output format")
+	}
+	if !strings.Contains(prompt, "Do NOT implement anything yet") {
+		t.Error("prompt should warn against implementing during planning")
+	}
+}
+
+func TestBuildValidatingInstructions(t *testing.T) {
+	ctx := &IterationContext{
+		PRDContent: `{"name": "Test"}`,
+		Phase:      PhaseValidating,
+		Iteration:  1,
+	}
+
+	prompt := ctx.BuildPrompt()
+
+	// Should contain validation-specific instructions
+	if !strings.Contains(prompt, "Validation Phase Instructions") {
+		t.Error("prompt should contain validation phase instructions")
+	}
+	if !strings.Contains(prompt, "<validation>") {
+		t.Error("prompt should contain validation output format")
+	}
+	if !strings.Contains(prompt, "valid:") {
+		t.Error("prompt should show valid field format")
+	}
+}
+
+func TestBuildExecutingInstructions(t *testing.T) {
+	ctx := &IterationContext{
+		PRDContent: `{"name": "Test"}`,
+		Phase:      PhaseExecuting,
+		Iteration:  1,
+	}
+
+	prompt := ctx.BuildPrompt()
+
+	// Should contain execution-specific instructions
+	if !strings.Contains(prompt, "Execution Phase Instructions") {
+		t.Error("prompt should contain execution phase instructions")
+	}
+	if !strings.Contains(prompt, "Follow the plan") {
+		t.Error("prompt should instruct to follow the plan")
+	}
+	if !strings.Contains(prompt, "tests_passing") {
+		t.Error("prompt should mention test verification")
+	}
+}
+
+func TestIterationContextNewFields(t *testing.T) {
+	ctx := &IterationContext{
+		PRDContent:         `{"name": "Test"}`,
+		Phase:              PhasePlanning,
+		PreviousPlan:       "The plan",
+		ValidationFeedback: "Some feedback",
+		ValidationAttempt:  2,
+		Iteration:          2,
+	}
+
+	data, err := json.Marshal(ctx)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+
+	var restored IterationContext
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if restored.PreviousPlan != ctx.PreviousPlan {
+		t.Error("PreviousPlan not preserved")
+	}
+	if restored.ValidationFeedback != ctx.ValidationFeedback {
+		t.Error("ValidationFeedback not preserved")
+	}
+	if restored.ValidationAttempt != ctx.ValidationAttempt {
+		t.Error("ValidationAttempt not preserved")
 	}
 }

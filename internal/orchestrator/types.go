@@ -107,6 +107,24 @@ const (
 	PhaseExecuting  Phase = "executing"
 )
 
+// ValidationResult represents the result of the validation phase
+type ValidationResult struct {
+	Valid    bool     `json:"valid"`
+	Issues   []string `json:"issues,omitempty"`
+	Feedback string   `json:"feedback,omitempty"`
+}
+
+// PlanOutput represents the output from the planning phase
+type PlanOutput struct {
+	Plan  string   `json:"plan"`
+	Steps []string `json:"steps"`
+}
+
+// PhaseConfig holds configuration for the three-phase loop
+type PhaseConfig struct {
+	MaxValidationAttempts int // Maximum times to loop back from validation to planning (default: 3)
+}
+
 // IterationContext holds fresh, self-contained context for each Claude iteration.
 // This ensures no conversation history accumulates - each call gets exactly what it needs.
 type IterationContext struct {
@@ -130,6 +148,15 @@ type IterationContext struct {
 
 	// Iteration is the iteration number
 	Iteration int `json:"iteration"`
+
+	// PreviousPlan holds the plan from the planning phase (used in validation/execution)
+	PreviousPlan string `json:"previous_plan,omitempty"`
+
+	// ValidationFeedback holds feedback from a failed validation (used when re-planning)
+	ValidationFeedback string `json:"validation_feedback,omitempty"`
+
+	// ValidationAttempt tracks which validation attempt this is (1-3)
+	ValidationAttempt int `json:"validation_attempt,omitempty"`
 }
 
 // FeatureContext holds information about the feature being worked on
@@ -190,20 +217,196 @@ func (ic *IterationContext) BuildPrompt() string {
 
 	// Phase-specific instructions
 	if ic.Phase != "" {
-		sb.WriteString(fmt.Sprintf("## Current Phase: %s\n", string(ic.Phase)))
-		switch ic.Phase {
-		case PhasePlanning:
-			sb.WriteString("Create a detailed implementation plan for the current feature.\n")
-		case PhaseValidating:
-			sb.WriteString("Review your implementation plan for gaps, edge cases, and issues.\n")
-		case PhaseExecuting:
-			sb.WriteString("Execute your validated plan step by step.\n")
-		}
+		sb.WriteString(fmt.Sprintf("## Current Phase: %s\n\n", string(ic.Phase)))
+		sb.WriteString(ic.buildPhaseInstructions())
 		sb.WriteString("\n")
+	} else {
+		// Default task instructions when no phase is set (legacy mode)
+		sb.WriteString(ic.buildDefaultTaskInstructions())
 	}
 
-	// Task instructions
-	sb.WriteString(`## Your Task
+	return sb.String()
+}
+
+// buildPhaseInstructions returns phase-specific instructions
+func (ic *IterationContext) buildPhaseInstructions() string {
+	switch ic.Phase {
+	case PhasePlanning:
+		return ic.buildPlanningInstructions()
+	case PhaseValidating:
+		return ic.buildValidatingInstructions()
+	case PhaseExecuting:
+		return ic.buildExecutingInstructions()
+	default:
+		return ic.buildDefaultTaskInstructions()
+	}
+}
+
+// buildPlanningInstructions returns instructions for the planning phase
+func (ic *IterationContext) buildPlanningInstructions() string {
+	var sb strings.Builder
+
+	sb.WriteString(`### Planning Phase Instructions
+
+Create a detailed implementation plan for the current feature. Your plan should:
+
+1. **Analyze the codebase** - Read relevant files to understand the current architecture
+2. **Identify changes needed** - List specific files to create, modify, or delete
+3. **Define implementation steps** - Break down the work into concrete, sequential steps
+4. **Consider edge cases** - Think about error handling, edge cases, and tests
+5. **Estimate test coverage** - Identify what tests need to be added or modified
+
+`)
+
+	// If there's validation feedback from a previous attempt, include it
+	if ic.ValidationFeedback != "" {
+		sb.WriteString(fmt.Sprintf(`### Previous Validation Feedback (Attempt %d/3)
+
+Your previous plan was rejected during validation. Address these issues:
+
+%s
+
+Please revise your plan to address all the issues above.
+
+`, ic.ValidationAttempt, ic.ValidationFeedback))
+	}
+
+	sb.WriteString(`### Output Format
+
+At the end of your planning, output your plan in this format:
+
+<plan>
+## Implementation Plan for [Feature ID]
+
+### Overview
+[Brief description of what will be implemented]
+
+### Files to Modify
+- path/to/file1.go: [what changes]
+- path/to/file2.go: [what changes]
+
+### Files to Create
+- path/to/new_file.go: [purpose]
+
+### Implementation Steps
+1. [First step with specific details]
+2. [Second step with specific details]
+3. [Continue...]
+
+### Tests to Add/Modify
+- [Test file and what tests]
+
+### Edge Cases Considered
+- [Edge case 1]
+- [Edge case 2]
+</plan>
+
+IMPORTANT: Only output the plan. Do NOT implement anything yet. The plan will be validated before execution.`)
+
+	return sb.String()
+}
+
+// buildValidatingInstructions returns instructions for the validation phase
+func (ic *IterationContext) buildValidatingInstructions() string {
+	var sb strings.Builder
+
+	sb.WriteString(`### Validation Phase Instructions
+
+Review the implementation plan below for completeness, correctness, and potential issues.
+
+`)
+
+	if ic.PreviousPlan != "" {
+		sb.WriteString(fmt.Sprintf(`### Plan to Validate
+
+%s
+
+`, ic.PreviousPlan))
+	}
+
+	sb.WriteString(`### Validation Checklist
+
+Check the plan against these criteria:
+
+1. **Completeness** - Does the plan cover all aspects of the feature?
+2. **Correctness** - Are the proposed changes technically sound?
+3. **Edge Cases** - Are edge cases and error conditions handled?
+4. **Test Coverage** - Are appropriate tests included?
+5. **Dependencies** - Are all dependencies and imports considered?
+6. **Breaking Changes** - Could this break existing functionality?
+7. **Code Style** - Does the plan follow the project's patterns?
+
+### Output Format
+
+Output your validation result in this format:
+
+<validation>
+valid: [true/false]
+issues:
+- [Issue 1 if any]
+- [Issue 2 if any]
+feedback: [Detailed feedback for re-planning if not valid]
+</validation>
+
+If the plan is valid, set valid: true and leave issues empty.
+If the plan has problems, set valid: false and list all issues with actionable feedback.
+
+IMPORTANT: Be thorough but pragmatic. Minor issues that can be handled during implementation should not block the plan.`)
+
+	return sb.String()
+}
+
+// buildExecutingInstructions returns instructions for the execution phase
+func (ic *IterationContext) buildExecutingInstructions() string {
+	var sb strings.Builder
+
+	sb.WriteString(`### Execution Phase Instructions
+
+Execute the validated implementation plan step by step.
+
+`)
+
+	if ic.PreviousPlan != "" {
+		sb.WriteString(fmt.Sprintf(`### Validated Plan to Execute
+
+%s
+
+`, ic.PreviousPlan))
+	}
+
+	sb.WriteString(`### Execution Rules
+
+1. **Follow the plan** - Implement each step in order
+2. **Run tests frequently** - After each significant change, run tests
+3. **Fix issues immediately** - If tests fail, fix before continuing
+4. **Commit only when passing** - All tests must pass before committing
+
+### On Completion
+
+When you've finished implementing the feature:
+
+1. Run the test command to verify all tests pass
+2. Update prd.json to set "passes": true for this feature
+3. Make a git commit with a descriptive message
+4. Append a summary to progress.txt
+
+### Output
+
+As you work, explain what you're doing. When complete, output:
+
+<execution_complete>
+feature: [Feature ID]
+tests_passing: [true/false]
+committed: [true/false]
+summary: [Brief summary of what was implemented]
+</execution_complete>`)
+
+	return sb.String()
+}
+
+// buildDefaultTaskInstructions returns the default task instructions (legacy mode)
+func (ic *IterationContext) buildDefaultTaskInstructions() string {
+	return `## Your Task
 
 1. Look at the PRD and find the highest priority feature where "passes" is false
 2. Implement that feature
@@ -221,7 +424,5 @@ IMPORTANT RULES:
 - Make small, incremental changes
 - Always run tests after changes
 
-Start by reading the codebase to understand the current implementation, then implement the next feature.`)
-
-	return sb.String()
+Start by reading the codebase to understand the current implementation, then implement the next feature.`
 }

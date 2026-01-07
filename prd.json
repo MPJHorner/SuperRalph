@@ -46,7 +46,7 @@
         "Each phase uses clean context with phase-specific prompts",
         "Test full loop with a sample feature"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-004",
