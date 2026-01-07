@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -14,6 +15,7 @@ import (
 // Runner handles executing Claude commands
 type Runner struct {
 	workDir    string
+	claudePath string
 	onOutput   func(line string)
 	onError    func(err error)
 	onComplete func(output string, success bool)
@@ -28,8 +30,53 @@ type Runner struct {
 // NewRunner creates a new agent runner
 func NewRunner(workDir string) *Runner {
 	return &Runner{
-		workDir: workDir,
+		workDir:    workDir,
+		claudePath: findClaudeBinary(),
 	}
+}
+
+// findClaudeBinary searches for the Claude CLI binary in common locations
+func findClaudeBinary() string {
+	// Check environment variable first
+	if envPath := os.Getenv("CLAUDE_PATH"); envPath != "" {
+		if _, err := os.Stat(envPath); err == nil {
+			return envPath
+		}
+	}
+
+	// Common locations to check
+	homeDir, _ := os.UserHomeDir()
+	locations := []string{
+		// Standard PATH lookup
+		"claude",
+		// Claude CLI default install location
+		filepath.Join(homeDir, ".claude", "local", "claude"),
+		// Other common locations
+		"/usr/local/bin/claude",
+		"/usr/bin/claude",
+		filepath.Join(homeDir, ".local", "bin", "claude"),
+		filepath.Join(homeDir, "bin", "claude"),
+		// npm global installs
+		"/usr/local/lib/node_modules/@anthropic-ai/claude-cli/bin/claude",
+		filepath.Join(homeDir, ".npm-global", "bin", "claude"),
+	}
+
+	for _, loc := range locations {
+		// For "claude" without path, check if it's in PATH
+		if loc == "claude" {
+			if path, err := exec.LookPath("claude"); err == nil {
+				return path
+			}
+			continue
+		}
+		// For full paths, check if file exists and is executable
+		if _, err := os.Stat(loc); err == nil {
+			return loc
+		}
+	}
+
+	// Fallback to "claude" and let it fail with a clear error
+	return "claude"
 }
 
 // OnOutput sets the callback for output lines
@@ -58,7 +105,7 @@ func (r *Runner) Run(ctx context.Context, prompt string) error {
 
 	// Build the command
 	// Using claude CLI with permission mode to accept edits automatically
-	r.cmd = exec.CommandContext(ctx, "claude",
+	r.cmd = exec.CommandContext(ctx, r.claudePath,
 		"--permission-mode", "acceptEdits",
 		"-p", prompt,
 	)
@@ -124,7 +171,7 @@ func (r *Runner) RunInteractive(ctx context.Context, prompt string) error {
 
 	// For interactive mode, we use a different approach
 	// We pass the prompt as the initial message
-	r.cmd = exec.CommandContext(ctx, "claude",
+	r.cmd = exec.CommandContext(ctx, r.claudePath,
 		"-p", prompt,
 	)
 	r.cmd.Dir = r.workDir
