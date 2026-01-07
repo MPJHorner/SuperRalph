@@ -4,12 +4,17 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/charmbracelet/huh"
-	"github.com/mpjhorner/superralph/internal/agent"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mpjhorner/superralph/internal/orchestrator"
 	"github.com/mpjhorner/superralph/internal/prd"
 	"github.com/spf13/cobra"
 )
+
+var planDebug bool
 
 var planCmd = &cobra.Command{
 	Use:   "plan",
@@ -18,8 +23,8 @@ var planCmd = &cobra.Command{
 
 Claude will:
   1. Ask what you're building
-  2. Help you think through features
-  3. Ask clarifying questions
+  2. Explore your existing code
+  3. Help you think through features
   4. Create a well-structured prd.json
 
 If a prd.json already exists, you'll be asked to confirm before replacing it.`,
@@ -27,8 +32,17 @@ If a prd.json already exists, you'll be asked to confirm before replacing it.`,
 }
 
 func init() {
+	planCmd.Flags().BoolVar(&planDebug, "debug", false, "Show Claude's thinking process")
 	rootCmd.AddCommand(planCmd)
 }
+
+// Styles for the planning session
+var (
+	claudeStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
+	userStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("79")).Bold(true)
+	thinkingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
+	actionStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+)
 
 func runPlan(cmd *cobra.Command, args []string) {
 	// Check if prd.json already exists
@@ -62,9 +76,9 @@ func runPlan(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Println()
-	fmt.Println(boldStyle.Render("Starting interactive PRD planning session..."))
-	fmt.Println(dimStyle.Render("Claude will help you define your project features."))
-	fmt.Println(dimStyle.Render("When done, Claude will create the prd.json file."))
+	fmt.Println(boldStyle.Render("Starting PRD Planning Session"))
+	fmt.Println(dimStyle.Render("Claude will ask questions and explore your codebase to create a PRD."))
+	fmt.Println(dimStyle.Render("Press Ctrl+C to cancel at any time."))
 	fmt.Println()
 
 	// Get working directory
@@ -74,16 +88,60 @@ func runPlan(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Create the agent runner
-	runner := agent.NewRunner(cwd)
+	// Create the orchestrator
+	orch := orchestrator.New(cwd).
+		SetDebug(planDebug).
+		OnMessage(func(role, content string) {
+			if role == "assistant" {
+				fmt.Println()
+				fmt.Println(claudeStyle.Render("Claude:"))
+				fmt.Println(content)
+			}
+		}).
+		OnThinking(func(thinking string) {
+			if planDebug {
+				fmt.Println()
+				fmt.Println(thinkingStyle.Render("Thinking: " + thinking))
+			}
+		}).
+		OnAction(func(action orchestrator.Action, params orchestrator.ActionParams) {
+			switch action {
+			case orchestrator.ActionReadFiles:
+				fmt.Println()
+				fmt.Println(actionStyle.Render("Reading files: " + fmt.Sprintf("%v", params.Paths)))
+			case orchestrator.ActionWriteFile:
+				fmt.Println()
+				fmt.Println(actionStyle.Render("Writing file: " + params.Path))
+			case orchestrator.ActionDone:
+				fmt.Println()
+				fmt.Println(successStyle.Render("✓") + " Planning complete!")
+			}
+		}).
+		SetPromptUser(func(question string) (string, error) {
+			fmt.Println()
+			fmt.Println(userStyle.Render("You:"))
+			return orchestrator.DefaultPromptUser("")
+		})
 
-	// Build the planning prompt
-	prompt := agent.BuildPlanPrompt()
+	// Set up signal handling for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Run in interactive mode
-	ctx := context.Background()
-	err = runner.RunInteractive(ctx, prompt)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Println("\n\nCancelling...")
+		cancel()
+	}()
+
+	// Run the planning session
+	err = orch.RunPlan(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Println(warnStyle.Render("⚠") + " Planning session cancelled")
+			os.Exit(0)
+		}
 		fmt.Println()
 		fmt.Println(errorStyle.Render("✗") + " Planning session ended with error")
 		fmt.Println(dimStyle.Render("  " + err.Error()))
@@ -124,6 +182,6 @@ func runPlan(cmd *cobra.Command, args []string) {
 		fmt.Println(dimStyle.Render("  Run 'superralph build' to start implementing features"))
 	} else {
 		fmt.Println(warnStyle.Render("⚠") + " No prd.json was created")
-		fmt.Println(dimStyle.Render("  Make sure Claude creates the prd.json file during the session"))
+		fmt.Println(dimStyle.Render("  The planning session ended without creating a PRD"))
 	}
 }

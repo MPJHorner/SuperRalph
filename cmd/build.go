@@ -4,17 +4,20 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	"github.com/mpjhorner/superralph/internal/agent"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mpjhorner/superralph/internal/git"
 	"github.com/mpjhorner/superralph/internal/notify"
+	"github.com/mpjhorner/superralph/internal/orchestrator"
 	"github.com/mpjhorner/superralph/internal/prd"
-	"github.com/mpjhorner/superralph/internal/tui"
 	"github.com/spf13/cobra"
 )
+
+var buildDebug bool
 
 var buildCmd = &cobra.Command{
 	Use:   "build",
@@ -28,15 +31,23 @@ The agent will:
   4. Run tests (must pass before committing)
   5. Update prd.json and progress.txt
   6. Commit changes
-  7. Repeat until all features pass or iterations exhausted
+  7. Repeat until all features pass
 
 Tests MUST pass before any commit. This is non-negotiable.`,
 	Run: runBuild,
 }
 
 func init() {
+	buildCmd.Flags().BoolVar(&buildDebug, "debug", false, "Show Claude's thinking process")
 	rootCmd.AddCommand(buildCmd)
 }
+
+// Styles for the build session
+var (
+	phaseStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	fileStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	cmdStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("171"))
+)
 
 func runBuild(cmd *cobra.Command, args []string) {
 	// Check if prd.json exists
@@ -85,14 +96,14 @@ func runBuild(cmd *cobra.Command, args []string) {
 		fmt.Println(successStyle.Render("✓") + " Initialized git repository")
 	}
 
-	// Prompt for number of iterations
+	// Prompt for confirmation
 	var iterationsStr string
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
-				Title("How many iterations?").
-				Description("Number of agent loops to run (default: 10)").
-				Placeholder("10").
+				Title("Maximum iterations?").
+				Description("Safety limit for agent loops (default: 50)").
+				Placeholder("50").
 				Value(&iterationsStr),
 		),
 	)
@@ -103,14 +114,18 @@ func runBuild(cmd *cobra.Command, args []string) {
 		os.Exit(0)
 	}
 
-	iterations := 10
+	maxIterations := 50
 	if iterationsStr != "" {
 		if n, err := strconv.Atoi(iterationsStr); err == nil && n > 0 {
-			iterations = n
+			maxIterations = n
 		}
 	}
 
-	fmt.Printf("\nStarting build with %d iterations...\n\n", iterations)
+	fmt.Println()
+	fmt.Println(boldStyle.Render("Starting Build Session"))
+	fmt.Println(dimStyle.Render(fmt.Sprintf("Max iterations: %d | Test command: %s", maxIterations, p.TestCommand)))
+	fmt.Println(dimStyle.Render("Press Ctrl+C to cancel at any time."))
+	fmt.Println()
 
 	// Get working directory
 	cwd, err := os.Getwd()
@@ -119,221 +134,98 @@ func runBuild(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Get PRD path
-	prdPath, _ := prd.GetPath()
+	// Track state for display
+	var currentFeature string
+	var currentPhase string
 
-	// Create the TUI model
-	model := tui.NewModel(p, prdPath, iterations)
+	// Create the orchestrator
+	orch := orchestrator.New(cwd).
+		SetDebug(buildDebug).
+		OnMessage(func(role, content string) {
+			if role == "assistant" && content != "" {
+				fmt.Println()
+				fmt.Println(content)
+			}
+		}).
+		OnThinking(func(thinking string) {
+			if buildDebug {
+				fmt.Println()
+				fmt.Println(thinkingStyle.Render("Thinking: " + thinking))
+			}
+		}).
+		OnAction(func(action orchestrator.Action, params orchestrator.ActionParams) {
+			switch action {
+			case orchestrator.ActionReadFiles:
+				for _, path := range params.Paths {
+					fmt.Println(dimStyle.Render("  Reading: ") + fileStyle.Render(path))
+				}
+			case orchestrator.ActionWriteFile:
+				fmt.Println(dimStyle.Render("  Writing: ") + fileStyle.Render(params.Path))
+			case orchestrator.ActionRunCommand:
+				fmt.Println(dimStyle.Render("  Running: ") + cmdStyle.Render(params.Command))
+			case orchestrator.ActionDone:
+				fmt.Println()
+				fmt.Println(successStyle.Render("✓") + " Build complete!")
+			}
+		}).
+		OnState(func(state any) {
+			if bs, ok := state.(*orchestrator.BuildState); ok {
+				if bs.Phase != currentPhase {
+					currentPhase = bs.Phase
+					fmt.Println()
+					fmt.Println(phaseStyle.Render("Phase: " + currentPhase))
+				}
+				if bs.CurrentFeature != currentFeature {
+					currentFeature = bs.CurrentFeature
+					fmt.Println(dimStyle.Render("Feature: ") + boldStyle.Render(currentFeature))
+				}
+			}
+		})
 
-	// Create the agent runner
-	runner := agent.NewRunner(cwd)
-
-	// Create a channel to communicate between TUI and agent
+	// Set up signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Build model with callbacks
-	buildModel := &buildTUIModel{
-		Model:      model,
-		runner:     runner,
-		ctx:        ctx,
-		cancel:     cancel,
-		iterations: iterations,
-		maxRetries: 3,
-		cwd:        cwd,
-	}
-
-	// Set up callbacks
-	model.OnQuit = func() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Println("\n\nCancelling build...")
 		cancel()
-	}
-	model.OnPause = func() {
-		runner.Pause()
-	}
-	model.OnResume = func() {
-		runner.Resume()
-	}
+	}()
 
-	buildModel.Model = model
-
-	// Run the TUI
-	program := tea.NewProgram(
-		buildModel,
-		tea.WithAltScreen(),
-	)
-
-	// Start the agent loop in background
-	go buildModel.runAgentLoop(program)
-
-	if _, err := program.Run(); err != nil {
-		fmt.Println("Error:", err)
+	// Run the build session
+	err = orch.RunBuild(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Println()
+			fmt.Println(warnStyle.Render("⚠") + " Build cancelled")
+			notify.Send("SuperRalph", "Build cancelled by user")
+			os.Exit(0)
+		}
+		fmt.Println()
+		fmt.Println(errorStyle.Render("✗") + " Build failed")
+		fmt.Println(dimStyle.Render("  " + err.Error()))
+		notify.SendError("Build failed: " + err.Error())
 		os.Exit(1)
 	}
-}
-
-type buildTUIModel struct {
-	tui.Model
-	runner     *agent.Runner
-	ctx        context.Context
-	cancel     context.CancelFunc
-	iterations int
-	maxRetries int
-	cwd        string
-	completed  bool
-	errored    bool
-}
-
-func (m *buildTUIModel) Init() tea.Cmd {
-	return m.Model.Init()
-}
-
-func (m *buildTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			m.cancel()
-			return m, tea.Quit
-		}
-	}
-
-	// Handle the underlying model update
-	updated, cmd := m.Model.Update(msg)
-	if model, ok := updated.(tui.Model); ok {
-		m.Model = model
-	}
-	return m, cmd
-}
-
-func (m *buildTUIModel) View() string {
-	return m.Model.View()
-}
-
-func (m *buildTUIModel) runAgentLoop(program *tea.Program) {
-	m.Model.State = tui.StateRunning
-	program.Send(tui.StateChangeMsg(tui.StateRunning))
-
-	for i := 1; i <= m.iterations; i++ {
-		// Check if cancelled
-		select {
-		case <-m.ctx.Done():
-			return
-		default:
-		}
-
-		// Check if paused
-		for m.runner.IsPaused() {
-			select {
-			case <-m.ctx.Done():
-				return
-			default:
-			}
-		}
-
-		// Reload PRD to get latest state
-		p, err := prd.LoadFromCurrentDir()
-		if err != nil {
-			program.Send(tui.LogMsg("Error loading PRD: " + err.Error()))
-			continue
-		}
-
-		// Check if complete
-		if p.IsComplete() {
-			program.Send(tui.LogMsg("All features complete!"))
-			program.Send(tui.StateChangeMsg(tui.StateComplete))
-			m.completed = true
-			notify.SendSuccess("PRD complete after " + fmt.Sprintf("%d", i-1) + " iterations")
-			return
-		}
-
-		// Get next feature
-		feature := p.NextFeature()
-		if feature == nil {
-			program.Send(tui.LogMsg("No more features to implement"))
-			program.Send(tui.StateChangeMsg(tui.StateComplete))
-			return
-		}
-
-		// Update iteration info
-		program.Send(tui.IterationStartMsg{
-			Iteration: i,
-			Feature:   feature,
-		})
-		program.Send(tui.LogMsg(fmt.Sprintf("=== Iteration %d/%d ===", i, m.iterations)))
-		program.Send(tui.LogMsg(fmt.Sprintf("Working on: %s - %s", feature.ID, feature.Description)))
-
-		// Build prompt
-		prompt := agent.BuildPrompt(p, i)
-
-		// Run with retries
-		success := false
-		for retry := 0; retry < m.maxRetries; retry++ {
-			if retry > 0 {
-				program.Send(tui.LogMsg(fmt.Sprintf("Retry %d/%d...", retry, m.maxRetries)))
-			}
-
-			// Set up output handler
-			m.runner.ClearOutput()
-			m.runner.OnOutput(func(line string) {
-				program.Send(tui.LogMsg(line))
-			})
-
-			// Run the agent
-			err := m.runner.Run(m.ctx, prompt)
-
-			output := m.runner.GetOutput()
-
-			// Check for completion signal
-			if agent.ContainsCompletionSignal(output) {
-				program.Send(tui.LogMsg("Received completion signal"))
-				program.Send(tui.StateChangeMsg(tui.StateComplete))
-				m.completed = true
-				notify.SendSuccess("PRD complete!")
-				return
-			}
-
-			if err == nil {
-				success = true
-				break
-			}
-
-			program.Send(tui.LogMsg(fmt.Sprintf("Error: %v", err)))
-		}
-
-		if !success {
-			program.Send(tui.LogMsg(fmt.Sprintf("Failed after %d retries", m.maxRetries)))
-			program.Send(tui.StateChangeMsg(tui.StateError))
-			m.errored = true
-			notify.SendError("Build failed after " + fmt.Sprintf("%d", m.maxRetries) + " retries")
-			return
-		}
-
-		// Reload PRD to update stats
-		p, err = prd.LoadFromCurrentDir()
-		if err == nil {
-			program.Send(tui.PRDUpdateMsg{
-				PRD:   p,
-				Stats: p.Stats(),
-			})
-		}
-
-		program.Send(tui.IterationCompleteMsg{
-			Iteration: i,
-			Success:   true,
-		})
-	}
-
-	// Finished all iterations
-	program.Send(tui.LogMsg(fmt.Sprintf("Completed %d iterations", m.iterations)))
 
 	// Check final state
-	p, err := prd.LoadFromCurrentDir()
-	if err == nil && p.IsComplete() {
-		program.Send(tui.StateChangeMsg(tui.StateComplete))
-		notify.SendSuccess("PRD complete!")
-	} else {
-		program.Send(tui.StateChangeMsg(tui.StateIdle))
+	p, err = prd.LoadFromCurrentDir()
+	if err == nil {
 		stats := p.Stats()
-		notify.Send("SuperRalph", fmt.Sprintf("Build finished: %d/%d features complete", stats.PassingFeatures, stats.TotalFeatures))
+		if p.IsComplete() {
+			fmt.Println()
+			fmt.Println(successStyle.Render("✓") + " All features complete!")
+			notify.SendSuccess("PRD complete! All features implemented.")
+		} else {
+			fmt.Println()
+			fmt.Printf("%s %d/%d features complete\n",
+				warnStyle.Render("⚠"),
+				stats.PassingFeatures,
+				stats.TotalFeatures)
+			fmt.Println(dimStyle.Render("  Run 'superralph build' again to continue"))
+			notify.Send("SuperRalph", fmt.Sprintf("Build paused: %d/%d features complete", stats.PassingFeatures, stats.TotalFeatures))
+		}
 	}
 }
