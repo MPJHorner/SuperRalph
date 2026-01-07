@@ -30,18 +30,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
 
+      - name: Get version info
+        id: version
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          echo "BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+          echo "GIT_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          go build -ldflags="-s -w" -o superralph-${{ matrix.suffix }} .
+          go build -ldflags="-s -w \
+            -X github.com/mpjhorner/superralph/internal/version.Version=${{ steps.version.outputs.VERSION }} \
+            -X github.com/mpjhorner/superralph/internal/version.BuildTime=${{ steps.version.outputs.BUILD_TIME }} \
+            -X github.com/mpjhorner/superralph/internal/version.GitCommit=${{ steps.version.outputs.GIT_COMMIT }}" \
+            -o superralph-${{ matrix.suffix }} .
           chmod +x superralph-${{ matrix.suffix }}
 
       - name: Upload artifact

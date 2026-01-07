@@ -6,6 +6,11 @@ BINARY=superralph
 # Build directory
 BUILD_DIR=build
 
+# Version info
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+BUILD_TIME ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
 # Go parameters
 GOCMD=go
 GOBUILD=$(GOCMD) build
@@ -14,11 +19,17 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 
+# Linker flags for version info
+LDFLAGS=-ldflags "-s -w \
+	-X github.com/mpjhorner/superralph/internal/version.Version=$(VERSION) \
+	-X github.com/mpjhorner/superralph/internal/version.BuildTime=$(BUILD_TIME) \
+	-X github.com/mpjhorner/superralph/internal/version.GitCommit=$(GIT_COMMIT)"
+
 # Build the binary
 build:
-	@echo "Building $(BINARY)..."
+	@echo "Building $(BINARY) $(VERSION)..."
 	@mkdir -p $(BUILD_DIR)
-	$(GOBUILD) -o $(BUILD_DIR)/$(BINARY) .
+	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY) .
 
 # Install to /usr/local/bin
 install: build
@@ -56,7 +67,7 @@ run: build
 build-all:
 	@echo "Building for multiple platforms..."
 	@mkdir -p $(BUILD_DIR)
-	GOOS=darwin GOARCH=amd64 $(GOBUILD) -o $(BUILD_DIR)/$(BINARY)-darwin-amd64 .
-	GOOS=darwin GOARCH=arm64 $(GOBUILD) -o $(BUILD_DIR)/$(BINARY)-darwin-arm64 .
-	GOOS=linux GOARCH=amd64 $(GOBUILD) -o $(BUILD_DIR)/$(BINARY)-linux-amd64 .
-	GOOS=linux GOARCH=arm64 $(GOBUILD) -o $(BUILD_DIR)/$(BINARY)-linux-arm64 .
+	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY)-darwin-amd64 .
+	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY)-darwin-arm64 .
+	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY)-linux-amd64 .
+	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY)-linux-arm64 .
