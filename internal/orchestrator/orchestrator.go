@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -411,7 +412,10 @@ func (o *Orchestrator) callClaudeWithRetry(ctx context.Context, prompt string) (
 
 // callClaudeRaw calls Claude and returns the raw text response
 func (o *Orchestrator) callClaudeRaw(ctx context.Context, prompt string) (string, error) {
-	o.debugLog("Executing: %s -p <prompt> --output-format text", o.claudePath)
+	o.debugLog("Executing Claude CLI (prompt: %d chars)...", len(prompt))
+
+	// Print waiting message to stdout so user knows we're working
+	fmt.Print("  Waiting for Claude")
 
 	cmd := exec.CommandContext(ctx, o.claudePath,
 		"-p", prompt,
@@ -419,7 +423,25 @@ func (o *Orchestrator) callClaudeRaw(ctx context.Context, prompt string) (string
 	)
 	cmd.Dir = o.workDir
 
+	// Run with a spinner effect
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				fmt.Print(".")
+			}
+		}
+	}()
+
 	output, err := cmd.Output()
+	close(done)
+	fmt.Println() // newline after dots
+
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return "", fmt.Errorf("claude exited with error: %s", string(exitErr.Stderr))
