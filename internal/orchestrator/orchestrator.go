@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,7 @@ type Orchestrator struct {
 	onState    func(state any)
 	onThinking func(thinking string)
 	onDebug    func(msg string)
+	onOutput   func(line string)
 	promptUser func(question string) (string, error)
 }
 
@@ -111,6 +113,12 @@ func (o *Orchestrator) OnDebug(fn func(msg string)) *Orchestrator {
 	return o
 }
 
+// OnOutput sets the callback for Claude's streaming output
+func (o *Orchestrator) OnOutput(fn func(line string)) *Orchestrator {
+	o.onOutput = fn
+	return o
+}
+
 // SetPromptUser sets the function to prompt the user
 func (o *Orchestrator) SetPromptUser(fn func(question string) (string, error)) *Orchestrator {
 	o.promptUser = fn
@@ -146,15 +154,31 @@ func (o *Orchestrator) RunPlan(ctx context.Context) error {
 	o.session.Mode = "plan"
 	o.session.State = &PlanState{Phase: "gathering"}
 
-	systemPrompt := o.buildPlanSystemPrompt()
-	o.session.Messages = append(o.session.Messages, Message{
-		Role:    "system",
-		Content: systemPrompt,
-	})
+	prompt := `Help me create a prd.json file for this project. 
 
-	// Start with initial prompt to Claude
-	initialPrompt := "Start the planning session. Ask the user what they want to build."
-	return o.runLoop(ctx, initialPrompt)
+Ask me what I want to build, explore the existing codebase if there is one, 
+and help me define features with clear verification steps.
+
+When done, create the prd.json file with this structure:
+{
+  "name": "Project Name",
+  "description": "Description",
+  "testCommand": "command to run tests",
+  "features": [
+    {
+      "id": "feat-001",
+      "category": "functional",
+      "priority": "high",
+      "description": "Feature description",
+      "steps": ["Step 1", "Step 2"],
+      "passes": false
+    }
+  ]
+}
+
+Start by asking what I want to build.`
+
+	return o.runClaudeInteractive(ctx, prompt)
 }
 
 // RunBuild runs the build loop
@@ -162,14 +186,214 @@ func (o *Orchestrator) RunBuild(ctx context.Context) error {
 	o.session.Mode = "build"
 	o.session.State = &BuildState{Phase: "reading", Iteration: 1}
 
-	// Build fresh context for this iteration
-	context := o.buildFreshContext()
+	// Read current PRD to build the prompt
+	prdContent, err := os.ReadFile(filepath.Join(o.workDir, "prd.json"))
+	if err != nil {
+		return fmt.Errorf("failed to read prd.json: %w", err)
+	}
 
-	// Start with the build prompt
-	return o.runBuildLoop(ctx, context)
+	// Read progress if exists
+	var progressContent string
+	if data, err := os.ReadFile(filepath.Join(o.workDir, "progress.txt")); err == nil {
+		progressContent = string(data)
+	}
+
+	prompt := fmt.Sprintf(`You are implementing features from a PRD. Here is the current state:
+
+## prd.json
+%s
+
+## progress.txt
+%s
+
+## Your Task
+
+1. Look at the PRD and find the highest priority feature where "passes" is false
+2. Implement that feature
+3. Run the tests using the testCommand from the PRD
+4. If tests pass:
+   - Update prd.json to set "passes": true for the completed feature
+   - Make a git commit with a descriptive message
+   - Append a summary to progress.txt
+5. If tests fail, fix the issues and try again
+6. Continue until all features pass or you need to stop
+
+IMPORTANT RULES:
+- Tests MUST pass before any commit
+- Work on ONE feature at a time
+- Make small, incremental changes
+- Always run tests after changes
+
+Start by reading the codebase to understand the current implementation, then implement the next feature.`,
+		string(prdContent), progressContent)
+
+	return o.runClaudeInteractive(ctx, prompt)
 }
 
-// buildFreshContext creates a clean context for each iteration (no history accumulation)
+// runClaudeInteractive runs Claude in interactive mode, streaming output
+func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) error {
+	o.debugLog("Starting Claude with prompt (%d chars)", len(prompt))
+
+	// Run Claude with the prompt, allowing it to use its tools
+	cmd := exec.CommandContext(ctx, o.claudePath,
+		"-p", prompt,
+		"--permission-mode", "acceptEdits",
+		"--output-format", "stream-json",
+	)
+	cmd.Dir = o.workDir
+
+	// Get pipes for stdout and stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdout pipe: %w", err)
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stderr pipe: %w", err)
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start claude: %w", err)
+	}
+
+	startTime := time.Now()
+	fmt.Println("  Claude is working...")
+	fmt.Println()
+
+	// Read stderr in background
+	var stderrBuf strings.Builder
+	go func() {
+		io.Copy(&stderrBuf, stderr)
+	}()
+
+	// Process streaming JSON output
+	scanner := bufio.NewScanner(stdout)
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+
+	var lastContent strings.Builder
+	inContent := false
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			// Not JSON, might be plain text - show it
+			if o.onOutput != nil {
+				o.onOutput(line)
+			} else {
+				fmt.Println(line)
+			}
+			continue
+		}
+
+		eventType, _ := event["type"].(string)
+
+		switch eventType {
+		case "system":
+			// System messages (like mode changes) - show in debug
+			if msg, ok := event["message"].(string); ok {
+				o.debugLog("System: %s", msg)
+			}
+
+		case "assistant":
+			// Assistant turn started
+			o.debugLog("Assistant turn started")
+
+		case "content_block_start":
+			// Content block starting
+			inContent = true
+			lastContent.Reset()
+
+		case "content_block_delta":
+			// Streaming content
+			if delta, ok := event["delta"].(map[string]any); ok {
+				if text, ok := delta["text"].(string); ok {
+					fmt.Print(text)
+					lastContent.WriteString(text)
+				}
+			}
+
+		case "content_block_stop":
+			// Content block ended
+			if inContent {
+				fmt.Println()
+				inContent = false
+			}
+
+		case "tool_use":
+			// Claude is using a tool
+			if name, ok := event["name"].(string); ok {
+				fmt.Printf("\n  [Tool: %s]\n", name)
+			}
+
+		case "tool_result":
+			// Tool returned a result
+			o.debugLog("Tool result received")
+
+		case "message_stop":
+			// Message complete
+			elapsed := time.Since(startTime).Seconds()
+			fmt.Printf("\n  [Message complete: %.1fs]\n", elapsed)
+
+		case "result":
+			// Final result
+			elapsed := time.Since(startTime).Seconds()
+			if subtype, ok := event["subtype"].(string); ok {
+				fmt.Printf("\n  [%s: %.1fs]\n", subtype, elapsed)
+			}
+			if cost, ok := event["cost_usd"].(float64); ok {
+				o.debugLog("Cost: $%.4f", cost)
+			}
+
+		case "error":
+			// Error occurred
+			if errData, ok := event["error"].(map[string]any); ok {
+				if msg, ok := errData["message"].(string); ok {
+					return fmt.Errorf("claude error: %s", msg)
+				}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading claude output: %w", err)
+	}
+
+	// Wait for command to finish
+	if err := cmd.Wait(); err != nil {
+		// Check if we have stderr output
+		if stderrBuf.Len() > 0 {
+			o.debugLog("Claude stderr: %s", stderrBuf.String())
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Exit code 0 is success, others might still be ok if we got output
+			if exitErr.ExitCode() != 0 {
+				o.debugLog("Claude exited with code %d", exitErr.ExitCode())
+			}
+		}
+	}
+
+	elapsed := time.Since(startTime).Seconds()
+	fmt.Printf("\n  [Complete: %.1fs]\n", elapsed)
+
+	return nil
+}
+
+// debugLog logs a debug message
+func (o *Orchestrator) debugLog(format string, args ...any) {
+	if o.debug && o.onDebug != nil {
+		o.onDebug(fmt.Sprintf(format, args...))
+	}
+}
+
+// buildFreshContext creates a clean context for each iteration
 func (o *Orchestrator) buildFreshContext() string {
 	var ctx strings.Builder
 
@@ -189,558 +413,7 @@ func (o *Orchestrator) buildFreshContext() string {
 		ctx.WriteString("\n```\n\n")
 	}
 
-	// Add directory tree (simple version)
-	ctx.WriteString("## Directory Structure\n```\n")
-	tree := o.getDirectoryTree(o.workDir, "", 3)
-	ctx.WriteString(tree)
-	ctx.WriteString("```\n\n")
-
 	return ctx.String()
-}
-
-// getDirectoryTree returns a simple directory tree
-func (o *Orchestrator) getDirectoryTree(dir string, prefix string, maxDepth int) string {
-	if maxDepth <= 0 {
-		return ""
-	}
-
-	var result strings.Builder
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return ""
-	}
-
-	// Filter out common ignored directories
-	ignored := map[string]bool{
-		".git": true, "node_modules": true, "vendor": true,
-		".idea": true, ".vscode": true, "__pycache__": true,
-		"build": true, "dist": true, ".superralph": true,
-	}
-
-	for i, entry := range entries {
-		if ignored[entry.Name()] || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-
-		isLast := i == len(entries)-1
-		connector := "├── "
-		if isLast {
-			connector = "└── "
-		}
-
-		result.WriteString(prefix + connector + entry.Name())
-		if entry.IsDir() {
-			result.WriteString("/")
-		}
-		result.WriteString("\n")
-
-		if entry.IsDir() {
-			newPrefix := prefix + "│   "
-			if isLast {
-				newPrefix = prefix + "    "
-			}
-			result.WriteString(o.getDirectoryTree(filepath.Join(dir, entry.Name()), newPrefix, maxDepth-1))
-		}
-	}
-
-	return result.String()
-}
-
-// runBuildLoop runs the build loop with fresh context each iteration
-func (o *Orchestrator) runBuildLoop(ctx context.Context, freshContext string) error {
-	maxIterations := 100
-
-	for i := 0; i < maxIterations; i++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		o.debugLog("=== Iteration %d ===", i+1)
-		o.debugLog("Calling Claude...")
-
-		// Build the prompt with fresh context each time
-		prompt := o.buildBuildPrompt(freshContext, i+1)
-		o.debugLog("Prompt length: %d chars", len(prompt))
-
-		// Call Claude
-		response, err := o.callClaudeWithRetry(ctx, prompt)
-		if err != nil {
-			return fmt.Errorf("claude call failed: %w", err)
-		}
-
-		// Handle thinking
-		if o.debug && response.Thinking != "" && o.onThinking != nil {
-			o.onThinking(response.Thinking)
-		}
-
-		// Handle message
-		if response.Message != "" && o.onMessage != nil {
-			o.onMessage("assistant", response.Message)
-		}
-
-		// Handle action
-		if o.onAction != nil {
-			o.onAction(response.Action, response.ActionParams)
-		}
-
-		// Execute action
-		result, done, err := o.executeAction(ctx, response.Action, response.ActionParams)
-		if err != nil {
-			return fmt.Errorf("action failed: %w", err)
-		}
-
-		o.debugLog("Action: %s, Result length: %d", response.Action, len(result))
-
-		if done {
-			return nil
-		}
-
-		// Rebuild fresh context for next iteration (includes any file changes)
-		freshContext = o.buildFreshContext()
-
-		// Add the result of the last action to context
-		if result != "" {
-			freshContext += "\n## Last Action Result\n" + result + "\n"
-		}
-	}
-
-	return fmt.Errorf("max iterations reached")
-}
-
-// runLoop is the main agent loop (used for planning)
-func (o *Orchestrator) runLoop(ctx context.Context, initialPrompt string) error {
-	o.session.Messages = append(o.session.Messages, Message{
-		Role:    "user",
-		Content: initialPrompt,
-	})
-
-	maxIterations := 100
-	for i := 0; i < maxIterations; i++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		// Build prompt from session messages
-		var promptBuilder strings.Builder
-		for _, msg := range o.session.Messages {
-			promptBuilder.WriteString(fmt.Sprintf("[%s]\n%s\n\n", msg.Role, msg.Content))
-		}
-
-		response, err := o.callClaudeWithRetry(ctx, promptBuilder.String())
-		if err != nil {
-			return fmt.Errorf("claude call failed: %w", err)
-		}
-
-		if o.debug && response.Thinking != "" && o.onThinking != nil {
-			o.onThinking(response.Thinking)
-		}
-
-		if response.Message != "" && o.onMessage != nil {
-			o.onMessage("assistant", response.Message)
-		}
-
-		o.session.Messages = append(o.session.Messages, Message{
-			Role:    "assistant",
-			Content: response.Message,
-		})
-
-		if o.onAction != nil {
-			o.onAction(response.Action, response.ActionParams)
-		}
-
-		result, done, err := o.executeAction(ctx, response.Action, response.ActionParams)
-		if err != nil {
-			return fmt.Errorf("action failed: %w", err)
-		}
-
-		if done {
-			_ = o.SaveSession()
-			return nil
-		}
-
-		if result != "" {
-			o.session.Messages = append(o.session.Messages, Message{
-				Role:    "user",
-				Content: result,
-			})
-		}
-
-		_ = o.SaveSession()
-	}
-
-	return fmt.Errorf("max iterations reached")
-}
-
-// callClaudeWithRetry calls Claude and retries with Haiku repair if JSON is broken
-func (o *Orchestrator) callClaudeWithRetry(ctx context.Context, prompt string) (*Response, error) {
-	// First attempt with main model
-	rawResponse, err := o.callClaudeRaw(ctx, prompt)
-	if err != nil {
-		return nil, err
-	}
-
-	o.debugLog("Raw response length: %d", len(rawResponse))
-
-	// Try to parse the response
-	response, err := o.parseResponse(rawResponse)
-	if err == nil {
-		return response, nil
-	}
-
-	o.debugLog("JSON parse failed, attempting Haiku repair: %v", err)
-
-	// Try to repair with Haiku
-	repaired, repairErr := o.repairJSONWithHaiku(ctx, rawResponse)
-	if repairErr != nil {
-		// Return original error if repair fails
-		return nil, fmt.Errorf("failed to parse response and repair failed: %w (repair error: %v)", err, repairErr)
-	}
-
-	// Try parsing the repaired JSON
-	response, err = o.parseResponse(repaired)
-	if err != nil {
-		return nil, fmt.Errorf("repair succeeded but still invalid JSON: %w", err)
-	}
-
-	o.debugLog("Haiku repair succeeded")
-	return response, nil
-}
-
-// callClaudeRaw calls Claude and returns the raw text response
-func (o *Orchestrator) callClaudeRaw(ctx context.Context, prompt string) (string, error) {
-	o.debugLog("Executing Claude CLI (prompt: %d chars)...", len(prompt))
-
-	// Use text output format for simpler parsing
-	// Add permission flags to avoid interactive prompts
-	cmd := exec.CommandContext(ctx, o.claudePath,
-		"-p", prompt,
-		"--output-format", "text",
-		"--permission-mode", "acceptEdits",
-	)
-	cmd.Dir = o.workDir
-
-	// Capture both stdout and stderr
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	fmt.Println("  Claude is thinking...")
-	startTime := time.Now()
-
-	// Run the command
-	err := cmd.Run()
-	elapsed := time.Since(startTime).Seconds()
-
-	// Log stderr if any (for debugging)
-	if stderr.Len() > 0 {
-		o.debugLog("Claude stderr: %s", stderr.String())
-	}
-
-	// Check for errors, but be lenient about exit codes
-	// Claude CLI sometimes exits with code 1 for informational messages
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// If we got output, try to use it despite the exit code
-			if stdout.Len() > 0 {
-				o.debugLog("Claude exited with code %d but produced output, continuing...", exitErr.ExitCode())
-			} else {
-				// No output and error - this is a real failure
-				errMsg := stderr.String()
-				if errMsg == "" {
-					errMsg = fmt.Sprintf("exit code %d", exitErr.ExitCode())
-				}
-				return "", fmt.Errorf("claude failed: %s", errMsg)
-			}
-		} else {
-			return "", fmt.Errorf("failed to run claude: %w", err)
-		}
-	}
-
-	result := stdout.String()
-	fmt.Printf("  [%.1fs, %d chars]\n", elapsed, len(result))
-	o.debugLog("Claude returned %d bytes", len(result))
-
-	if result == "" {
-		return "", fmt.Errorf("claude returned empty response")
-	}
-
-	return result, nil
-}
-
-// parseResponse tries to parse a Response from Claude's output
-func (o *Orchestrator) parseResponse(text string) (*Response, error) {
-	// Try to extract JSON from the text
-	jsonStr := extractJSON(text)
-	if jsonStr == "" {
-		return nil, fmt.Errorf("no JSON found in response")
-	}
-
-	var response Response
-	if err := json.Unmarshal([]byte(jsonStr), &response); err != nil {
-		return nil, fmt.Errorf("invalid JSON: %w", err)
-	}
-
-	// Validate required fields
-	if response.Action == "" {
-		return nil, fmt.Errorf("missing required field: action")
-	}
-
-	return &response, nil
-}
-
-// repairJSONWithHaiku uses Haiku to fix broken JSON
-func (o *Orchestrator) repairJSONWithHaiku(ctx context.Context, brokenResponse string) (string, error) {
-	repairPrompt := fmt.Sprintf(`You are a JSON repair assistant. Fix the following text to be valid JSON matching this schema:
-
-{
-  "thinking": "string (optional)",
-  "action": "read_files" | "write_file" | "run_command" | "done",
-  "action_params": {
-    "paths": ["array of file paths"] (for read_files),
-    "path": "file path" (for write_file),
-    "content": "file content" (for write_file),
-    "command": "shell command" (for run_command)
-  },
-  "message": "string (optional)"
-}
-
-Respond with ONLY the fixed JSON, no explanation, no markdown code blocks, just raw JSON.
-
-Text to fix:
-%s`, brokenResponse)
-
-	cmd := exec.CommandContext(ctx, o.claudePath,
-		"-p", repairPrompt,
-		"--output-format", "text",
-		"--model", "haiku",
-	)
-	cmd.Dir = o.workDir
-
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("haiku repair call failed: %w", err)
-	}
-
-	return strings.TrimSpace(string(output)), nil
-}
-
-// extractJSON tries to extract JSON from a string that might contain markdown
-func extractJSON(s string) string {
-	s = strings.TrimSpace(s)
-
-	// If it starts with {, try to parse directly
-	if strings.HasPrefix(s, "{") {
-		return extractJSONObject(s)
-	}
-
-	// Try to find JSON in code blocks
-	if start := strings.Index(s, "```json"); start != -1 {
-		start += 7
-		if end := strings.Index(s[start:], "```"); end != -1 {
-			return strings.TrimSpace(s[start : start+end])
-		}
-	}
-
-	if start := strings.Index(s, "```"); start != -1 {
-		start += 3
-		// Skip any language identifier on the same line
-		if newline := strings.Index(s[start:], "\n"); newline != -1 {
-			start += newline + 1
-		}
-		if end := strings.Index(s[start:], "```"); end != -1 {
-			candidate := strings.TrimSpace(s[start : start+end])
-			if strings.HasPrefix(candidate, "{") {
-				return candidate
-			}
-		}
-	}
-
-	// Try to find raw JSON object
-	if start := strings.Index(s, "{"); start != -1 {
-		return extractJSONObject(s[start:])
-	}
-
-	return ""
-}
-
-// extractJSONObject extracts a JSON object by matching braces
-func extractJSONObject(s string) string {
-	if !strings.HasPrefix(s, "{") {
-		return ""
-	}
-
-	depth := 0
-	inString := false
-	escape := false
-
-	for i, c := range s {
-		if escape {
-			escape = false
-			continue
-		}
-		if c == '\\' && inString {
-			escape = true
-			continue
-		}
-		if c == '"' {
-			inString = !inString
-			continue
-		}
-		if inString {
-			continue
-		}
-		if c == '{' {
-			depth++
-		} else if c == '}' {
-			depth--
-			if depth == 0 {
-				return s[:i+1]
-			}
-		}
-	}
-
-	return ""
-}
-
-// executeAction executes the requested action
-func (o *Orchestrator) executeAction(ctx context.Context, action Action, params ActionParams) (result string, done bool, err error) {
-	switch action {
-	case ActionAskUser:
-		if o.promptUser == nil {
-			return "", false, fmt.Errorf("no prompt user function set")
-		}
-		answer, err := o.promptUser(params.Question)
-		if err != nil {
-			return "", false, err
-		}
-		return fmt.Sprintf("User response: %s", answer), false, nil
-
-	case ActionReadFiles:
-		var contents strings.Builder
-		for _, path := range params.Paths {
-			fullPath := filepath.Join(o.workDir, path)
-			data, err := os.ReadFile(fullPath)
-			if err != nil {
-				contents.WriteString(fmt.Sprintf("File %s: ERROR: %s\n\n", path, err.Error()))
-			} else {
-				contents.WriteString(fmt.Sprintf("File %s:\n```\n%s\n```\n\n", path, string(data)))
-			}
-		}
-		return contents.String(), false, nil
-
-	case ActionWriteFile:
-		fullPath := filepath.Join(o.workDir, params.Path)
-		dir := filepath.Dir(fullPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Sprintf("Failed to create directory: %s", err), false, nil
-		}
-		if err := os.WriteFile(fullPath, []byte(params.Content), 0644); err != nil {
-			return fmt.Sprintf("Failed to write file: %s", err), false, nil
-		}
-		return fmt.Sprintf("Successfully wrote file: %s", params.Path), false, nil
-
-	case ActionRunCommand:
-		cmd := exec.CommandContext(ctx, "sh", "-c", params.Command)
-		cmd.Dir = o.workDir
-		output, err := cmd.CombinedOutput()
-		exitCode := 0
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			}
-		}
-		return fmt.Sprintf("Command: %s\nExit code: %d\nOutput:\n%s", params.Command, exitCode, string(output)), false, nil
-
-	case ActionDone:
-		return "", true, nil
-
-	default:
-		return "", false, fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-// debugLog logs a debug message
-func (o *Orchestrator) debugLog(format string, args ...any) {
-	if o.debug && o.onDebug != nil {
-		o.onDebug(fmt.Sprintf(format, args...))
-	}
-}
-
-// buildBuildPrompt creates the prompt for a build iteration
-func (o *Orchestrator) buildBuildPrompt(context string, iteration int) string {
-	return fmt.Sprintf(`You are a code implementation agent. Your task is to implement features from the PRD.
-
-## CRITICAL: Response Format
-
-You MUST respond with ONLY a valid JSON object. No explanations, no markdown, just JSON:
-
-{
-  "thinking": "your reasoning here",
-  "action": "read_files",
-  "action_params": {
-    "paths": ["file1.go", "file2.go"]
-  },
-  "message": "Status message for user"
-}
-
-Valid actions:
-- "read_files" with "paths": ["file1", "file2"] - Read files to understand code
-- "write_file" with "path": "file.go" and "content": "..." - Write/update a file
-- "run_command" with "command": "go test ./..." - Run a shell command
-- "done" - All features are complete
-
-## Current Context
-
-%s
-
-## Iteration: %d
-
-## Your Task
-
-1. Look at prd.json - find the highest priority feature with "passes": false
-2. Implement that ONE feature
-3. Run tests to verify (test command is in prd.json)
-4. If tests pass, commit and update prd.json to mark the feature as passes: true
-5. If all features pass, use action "done"
-
-## Rules
-
-- TESTS MUST PASS before committing
-- Work on ONE feature at a time
-- Make small, incremental changes
-- Always run tests after changes
-
-Respond with JSON only:`, context, iteration)
-}
-
-// buildPlanSystemPrompt builds the system prompt for planning
-func (o *Orchestrator) buildPlanSystemPrompt() string {
-	return `You are a PRD planning assistant. Help create a prd.json file.
-
-## CRITICAL: Response Format
-
-You MUST respond with ONLY a valid JSON object:
-
-{
-  "thinking": "your reasoning",
-  "action": "ask_user",
-  "action_params": {
-    "question": "What are you building?"
-  },
-  "message": "Let's plan your project."
-}
-
-Valid actions:
-- "ask_user" with "question": "..." - Ask the user something
-- "read_files" with "paths": [...] - Read existing code
-- "write_file" with "path" and "content" - Write prd.json
-- "done" - Planning complete
-
-Respond with JSON only.`
 }
 
 // DefaultPromptUser provides a simple terminal-based user prompt

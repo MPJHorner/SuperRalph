@@ -5,59 +5,6 @@ import (
 	"testing"
 )
 
-func TestExtractJSON(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		wantJSON bool
-	}{
-		{
-			name:     "raw json",
-			input:    `{"action": "ask_user", "action_params": {"question": "What?"}}`,
-			wantJSON: true,
-		},
-		{
-			name:     "json in code block",
-			input:    "Here's my response:\n```json\n{\"action\": \"done\"}\n```",
-			wantJSON: true,
-		},
-		{
-			name:     "json in plain code block",
-			input:    "```\n{\"action\": \"read_files\"}\n```",
-			wantJSON: true,
-		},
-		{
-			name:     "json with text before",
-			input:    "Let me respond with: {\"action\": \"done\"}",
-			wantJSON: true,
-		},
-		{
-			name:     "no json",
-			input:    "Just some regular text",
-			wantJSON: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := extractJSON(tt.input)
-			if tt.wantJSON && result == "" {
-				t.Errorf("expected JSON but got empty string")
-			}
-			if !tt.wantJSON && result != "" {
-				t.Errorf("expected no JSON but got: %s", result)
-			}
-			if tt.wantJSON && result != "" {
-				// Verify it's valid JSON
-				var m map[string]any
-				if err := json.Unmarshal([]byte(result), &m); err != nil {
-					t.Errorf("extracted JSON is invalid: %v", err)
-				}
-			}
-		})
-	}
-}
-
 func TestResponseParsing(t *testing.T) {
 	jsonStr := `{
 		"thinking": "I should ask what they're building",
@@ -150,5 +97,29 @@ func TestSessionSerialization(t *testing.T) {
 	}
 	if len(restored.Messages) != len(session.Messages) {
 		t.Errorf("expected %d messages, got %d", len(session.Messages), len(restored.Messages))
+	}
+}
+
+func TestOrchestratorNew(t *testing.T) {
+	orch := New("/tmp/test")
+	if orch == nil {
+		t.Fatal("expected non-nil orchestrator")
+	}
+	if orch.workDir != "/tmp/test" {
+		t.Errorf("expected workDir /tmp/test, got %s", orch.workDir)
+	}
+	if orch.session == nil {
+		t.Fatal("expected non-nil session")
+	}
+	if orch.session.ID == "" {
+		t.Error("expected non-empty session ID")
+	}
+}
+
+func TestOrchestratorSetDebug(t *testing.T) {
+	orch := New("/tmp/test")
+	orch.SetDebug(true)
+	if !orch.debug {
+		t.Error("expected debug to be true")
 	}
 }
