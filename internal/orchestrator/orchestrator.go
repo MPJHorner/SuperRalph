@@ -257,9 +257,11 @@ func (o *Orchestrator) runBuildLoop(ctx context.Context, freshContext string) er
 		}
 
 		o.debugLog("=== Iteration %d ===", i+1)
+		o.debugLog("Calling Claude...")
 
 		// Build the prompt with fresh context each time
 		prompt := o.buildBuildPrompt(freshContext, i+1)
+		o.debugLog("Prompt length: %d chars", len(prompt))
 
 		// Call Claude
 		response, err := o.callClaudeWithRetry(ctx, prompt)
@@ -409,6 +411,8 @@ func (o *Orchestrator) callClaudeWithRetry(ctx context.Context, prompt string) (
 
 // callClaudeRaw calls Claude and returns the raw text response
 func (o *Orchestrator) callClaudeRaw(ctx context.Context, prompt string) (string, error) {
+	o.debugLog("Executing: %s -p <prompt> --output-format text", o.claudePath)
+
 	cmd := exec.CommandContext(ctx, o.claudePath,
 		"-p", prompt,
 		"--output-format", "text",
@@ -423,6 +427,7 @@ func (o *Orchestrator) callClaudeRaw(ctx context.Context, prompt string) (string
 		return "", err
 	}
 
+	o.debugLog("Claude returned %d bytes", len(output))
 	return string(output), nil
 }
 
