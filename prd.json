@@ -108,7 +108,7 @@
         "Keyboard shortcuts: q=quit, p=pause, r=resume, d=toggle debug",
         "Test TUI renders correctly and updates in real-time"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-008",

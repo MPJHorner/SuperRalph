@@ -57,16 +57,25 @@ type Model struct {
 	RetryCount       int
 	MaxRetries       int
 
+	// Phase tracking
+	CurrentPhase components.Phase
+
 	// UI components
-	Spinner spinner.Model
-	LogView *components.LogView
-	Width   int
-	Height  int
+	Spinner        spinner.Model
+	LogView        *components.LogView
+	PhaseIndicator *components.PhaseIndicator
+	ActionPanel    *components.ActionPanel
+	Width          int
+	Height         int
+
+	// Debug mode
+	DebugMode bool
 
 	// Callbacks
 	OnQuit   func()
 	OnPause  func()
 	OnResume func()
+	OnDebug  func(enabled bool)
 }
 
 // NewModel creates a new TUI model
@@ -76,16 +85,20 @@ func NewModel(p *prd.PRD, prdPath string, maxIterations int) Model {
 	s.Style = lipgloss.NewStyle().Foreground(ColorPrimary)
 
 	return Model{
-		PRD:           p,
-		PRDPath:       prdPath,
-		PRDStats:      p.Stats(),
-		State:         StateIdle,
-		MaxIterations: maxIterations,
-		MaxRetries:    3,
-		Spinner:       s,
-		LogView:       components.NewLogView(80, 10),
-		Width:         80,
-		Height:        24,
+		PRD:            p,
+		PRDPath:        prdPath,
+		PRDStats:       p.Stats(),
+		State:          StateIdle,
+		MaxIterations:  maxIterations,
+		MaxRetries:     3,
+		CurrentPhase:   components.PhaseNone,
+		Spinner:        s,
+		LogView:        components.NewLogView(80, 10),
+		PhaseIndicator: components.NewPhaseIndicator(),
+		ActionPanel:    components.NewActionPanel(80, 8),
+		Width:          80,
+		Height:         24,
+		DebugMode:      false,
 	}
 }
 
@@ -122,6 +135,29 @@ type (
 	ErrorMsgType struct {
 		Error string
 	}
+
+	// PhaseChangeMsg signals a phase change
+	PhaseChangeMsg struct {
+		Phase components.Phase
+	}
+
+	// ActionAddMsg adds an action to the panel
+	ActionAddMsg struct {
+		Action components.ActionItem
+	}
+
+	// ActionUpdateMsg updates an action status
+	ActionUpdateMsg struct {
+		ID     string
+		Status components.ActionStatus
+		Output string
+	}
+
+	// ActionClearMsg clears all actions
+	ActionClearMsg struct{}
+
+	// DebugToggleMsg toggles debug mode
+	DebugToggleMsg struct{}
 )
 
 // Init initializes the model
@@ -162,13 +198,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.OnResume()
 				}
 			}
+		case "d":
+			m.DebugMode = !m.DebugMode
+			if m.OnDebug != nil {
+				m.OnDebug(m.DebugMode)
+			}
 		}
 
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
 		m.LogView.Width = msg.Width - 4
-		m.LogView.Height = m.Height / 3
+		m.LogView.Height = m.Height / 4
+		m.ActionPanel.Width = msg.Width - 4
+		m.ActionPanel.Height = 8
+		m.PhaseIndicator.Width = msg.Width - 4
 
 	case TickMsg:
 		return m, tickCmd()
@@ -191,6 +235,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.CurrentIteration = msg.Iteration
 		m.CurrentFeature = msg.Feature
 		m.RetryCount = 0
+		m.ActionPanel.Clear()
 
 	case IterationCompleteMsg:
 		if msg.Success {
@@ -206,6 +251,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ErrorMsgType:
 		m.ErrorMsg = msg.Error
 		m.State = StateError
+
+	case PhaseChangeMsg:
+		m.CurrentPhase = msg.Phase
+		m.PhaseIndicator.SetPhase(msg.Phase)
+
+	case ActionAddMsg:
+		m.ActionPanel.AddAction(msg.Action)
+
+	case ActionUpdateMsg:
+		m.ActionPanel.UpdateAction(msg.ID, msg.Status, msg.Output)
+
+	case ActionClearMsg:
+		m.ActionPanel.Clear()
+
+	case DebugToggleMsg:
+		m.DebugMode = !m.DebugMode
+		if m.OnDebug != nil {
+			m.OnDebug(m.DebugMode)
+		}
 	}
 
 	return m, nil
@@ -223,9 +287,21 @@ func (m Model) View() string {
 	b.WriteString(m.renderProgress())
 	b.WriteString("\n")
 
+	// Phase indicator (if we're in a phase)
+	if m.CurrentPhase != components.PhaseNone {
+		b.WriteString(m.renderPhase())
+		b.WriteString("\n")
+	}
+
 	// Status section
 	b.WriteString(m.renderStatus())
 	b.WriteString("\n")
+
+	// Action panel (if there are actions)
+	if len(m.ActionPanel.Actions) > 0 {
+		b.WriteString(m.renderActions())
+		b.WriteString("\n")
+	}
 
 	// Log section
 	b.WriteString(m.renderLog())
@@ -345,6 +421,17 @@ func (m Model) renderLog() string {
 	return m.LogView.Render()
 }
 
+func (m Model) renderPhase() string {
+	var b strings.Builder
+	b.WriteString(BoldStyle.Render("Phase: "))
+	b.WriteString(m.PhaseIndicator.Render())
+	return b.String()
+}
+
+func (m Model) renderActions() string {
+	return m.ActionPanel.Render()
+}
+
 func (m Model) renderHelp() string {
 	var keys []string
 	keys = append(keys, "[q] Quit")
@@ -353,6 +440,11 @@ func (m Model) renderHelp() string {
 	}
 	if m.State == StatePaused {
 		keys = append(keys, "[r] Resume")
+	}
+	if m.DebugMode {
+		keys = append(keys, "[d] Debug ON")
+	} else {
+		keys = append(keys, "[d] Debug")
 	}
 
 	return HelpStyle.Render(strings.Join(keys, "  "))
@@ -372,4 +464,35 @@ func (m *Model) SetState(state RunState) {
 func (m *Model) UpdatePRD(p *prd.PRD) {
 	m.PRD = p
 	m.PRDStats = p.Stats()
+}
+
+// SetPhase sets the current phase
+func (m *Model) SetPhase(phase components.Phase) {
+	m.CurrentPhase = phase
+	m.PhaseIndicator.SetPhase(phase)
+}
+
+// AddAction adds an action to the action panel
+func (m *Model) AddAction(action components.ActionItem) {
+	m.ActionPanel.AddAction(action)
+}
+
+// UpdateAction updates an action's status
+func (m *Model) UpdateAction(id string, status components.ActionStatus, output string) {
+	m.ActionPanel.UpdateAction(id, status, output)
+}
+
+// ClearActions clears all actions from the panel
+func (m *Model) ClearActions() {
+	m.ActionPanel.Clear()
+}
+
+// SetDebugMode sets the debug mode
+func (m *Model) SetDebugMode(enabled bool) {
+	m.DebugMode = enabled
+}
+
+// IsDebugMode returns whether debug mode is enabled
+func (m *Model) IsDebugMode() bool {
+	return m.DebugMode
 }
