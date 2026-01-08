@@ -7,12 +7,6 @@ run:
   
   # Include test files
   tests: true
-  
-  # Skip vendor, third_party, etc.
-  skip-dirs:
-    - vendor
-    - build
-    - .git
 
 linters:
   # Disable all linters by default, enable specific ones
@@ -147,6 +141,12 @@ linters-settings:
     for-loops: false
 
 issues:
+  # Exclude directories from analysis
+  exclude-dirs:
+    - vendor
+    - build
+    - .git
+  
   # Maximum issues count per one linter (0 = unlimited)
   max-issues-per-linter: 0
   
