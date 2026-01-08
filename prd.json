@@ -168,7 +168,7 @@
         "Progress file is read-only context for Claude (helps understand what was done)",
         "Test progress file grows correctly across multiple features"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-012",

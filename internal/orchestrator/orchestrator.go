@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mpjhorner/superralph/internal/prd"
+	"github.com/mpjhorner/superralph/internal/progress"
 	"github.com/mpjhorner/superralph/internal/tagging"
 )
 
@@ -43,6 +44,10 @@ type Orchestrator struct {
 	snapshotConfig SnapshotConfig
 	toolConfig     ToolConfig
 
+	// Progress tracking
+	progressWriter *progress.Writer
+	currentEntry   *ProgressEntryBuilder // Builder for the current progress entry
+
 	// Initial tags for planning context
 	initialTags []string
 
@@ -68,6 +73,7 @@ func New(workDir string) *Orchestrator {
 		parallel:       NewParallelExecutor(workDir),
 		snapshotConfig: DefaultSnapshotConfig(),
 		toolConfig:     DefaultToolConfig(),
+		progressWriter: progress.NewWriter(workDir),
 		session: &Session{
 			ID:       uuid.New().String(),
 			WorkDir:  workDir,
@@ -253,6 +259,87 @@ func (o *Orchestrator) SetAllowWrite(allow bool) *Orchestrator {
 func (o *Orchestrator) SetAllowEdit(allow bool) *Orchestrator {
 	o.toolConfig.AllowEdit = allow
 	return o
+}
+
+// GetProgressWriter returns the progress writer for external use
+func (o *Orchestrator) GetProgressWriter() *progress.Writer {
+	return o.progressWriter
+}
+
+// StartProgressEntry begins a new progress entry for the current iteration.
+// Call this at the start of each iteration to track work done.
+func (o *Orchestrator) StartProgressEntry(iteration int, currentPRD *prd.PRD) {
+	stats := currentPRD.Stats()
+	nextFeature := currentPRD.NextFeature()
+
+	var featureRef *progress.FeatureRef
+	if nextFeature != nil {
+		featureRef = &progress.FeatureRef{
+			ID:          nextFeature.ID,
+			Description: nextFeature.Description,
+		}
+	}
+
+	o.currentEntry = NewProgressEntryBuilder(iteration)
+	o.currentEntry.SetStartingState(stats.TotalFeatures, stats.PassingFeatures, featureRef)
+}
+
+// AddProgressWork adds a work item to the current progress entry
+func (o *Orchestrator) AddProgressWork(work string) {
+	if o.currentEntry != nil {
+		o.currentEntry.AddWorkDone(work)
+	}
+}
+
+// SetProgressTestResult sets the test result for the current progress entry
+func (o *Orchestrator) SetProgressTestResult(command string, passed bool, details string) {
+	if o.currentEntry != nil {
+		o.currentEntry.SetTestResult(command, passed, details)
+	}
+}
+
+// AddProgressCommit adds a git commit to the current progress entry
+func (o *Orchestrator) AddProgressCommit(hash, message string) {
+	if o.currentEntry != nil {
+		o.currentEntry.AddCommit(hash, message)
+	}
+}
+
+// AddProgressNote adds a note for the next session
+func (o *Orchestrator) AddProgressNote(note string) {
+	if o.currentEntry != nil {
+		o.currentEntry.AddNote(note)
+	}
+}
+
+// FinishProgressEntry completes and writes the current progress entry.
+// Call this at the end of each iteration or significant checkpoint.
+func (o *Orchestrator) FinishProgressEntry(currentPRD *prd.PRD, allTestsPassing bool) error {
+	if o.currentEntry == nil {
+		return nil // No entry to finish
+	}
+
+	stats := currentPRD.Stats()
+	entry := o.currentEntry.Build(stats.TotalFeatures, stats.PassingFeatures, allTestsPassing)
+
+	// Write the entry to the progress file
+	if err := o.progressWriter.Append(entry); err != nil {
+		return fmt.Errorf("failed to write progress entry: %w", err)
+	}
+
+	// Clear the current entry
+	o.currentEntry = nil
+	return nil
+}
+
+// HasProgressEntry returns true if there's an active progress entry being built
+func (o *Orchestrator) HasProgressEntry() bool {
+	return o.currentEntry != nil
+}
+
+// GetCurrentProgressEntry returns the current progress entry builder (for testing)
+func (o *Orchestrator) GetCurrentProgressEntry() *ProgressEntryBuilder {
+	return o.currentEntry
 }
 
 // LoadSession loads a session from disk

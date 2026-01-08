@@ -10,6 +10,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mpjhorner/superralph/internal/prd"
+	"github.com/mpjhorner/superralph/internal/progress"
 )
 
 func TestResponseParsing(t *testing.T) {
@@ -1539,4 +1542,393 @@ func TestToolConfigBuildFlagOrder(t *testing.T) {
 	// Verify the order is Read, Write, Edit, then Bash commands
 	expected := "Read,Write,Edit,Bash(go:*),Bash(npm:*)"
 	assert.Equal(t, expected, flag)
+}
+
+// ============================================================================
+// Progress File Integration Tests (feat-011)
+// ============================================================================
+
+func TestOrchestratorHasProgressWriter(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	require.NotNil(t, orch.GetProgressWriter())
+}
+
+func TestProgressEntryBuilderNew(t *testing.T) {
+	builder := NewProgressEntryBuilder(5)
+
+	require.NotNil(t, builder)
+	assert.Equal(t, 5, builder.Iteration)
+	assert.NotZero(t, builder.Timestamp)
+	assert.Empty(t, builder.WorkDone)
+	assert.Empty(t, builder.Commits)
+}
+
+func TestProgressEntryBuilderSetStartingState(t *testing.T) {
+	builder := NewProgressEntryBuilder(1)
+
+	feature := &progress.FeatureRef{
+		ID:          "feat-001",
+		Description: "Test feature",
+	}
+
+	result := builder.SetStartingState(10, 3, feature)
+
+	// Verify chaining
+	assert.Equal(t, builder, result)
+
+	assert.Equal(t, 10, builder.StartingState.FeaturesTotal)
+	assert.Equal(t, 3, builder.StartingState.FeaturesPassing)
+	assert.Equal(t, feature, builder.StartingState.WorkingOn)
+	assert.Equal(t, feature, builder.CurrentFeature)
+}
+
+func TestProgressEntryBuilderAddWorkDone(t *testing.T) {
+	builder := NewProgressEntryBuilder(1)
+
+	builder.AddWorkDone("Implemented feature X").
+		AddWorkDone("Added tests for X").
+		AddWorkDone("Updated documentation")
+
+	require.Len(t, builder.WorkDone, 3)
+	assert.Equal(t, "Implemented feature X", builder.WorkDone[0])
+	assert.Equal(t, "Added tests for X", builder.WorkDone[1])
+	assert.Equal(t, "Updated documentation", builder.WorkDone[2])
+}
+
+func TestProgressEntryBuilderSetTestResult(t *testing.T) {
+	builder := NewProgressEntryBuilder(1)
+
+	result := builder.SetTestResult("go test ./...", true, "47 tests passed")
+
+	assert.Equal(t, builder, result)
+	assert.Equal(t, "go test ./...", builder.Testing.Command)
+	assert.True(t, builder.Testing.Passed)
+	assert.Equal(t, "47 tests passed", builder.Testing.Details)
+}
+
+func TestProgressEntryBuilderAddCommit(t *testing.T) {
+	builder := NewProgressEntryBuilder(1)
+
+	builder.AddCommit("abc1234", "feat: add feature X").
+		AddCommit("def5678", "test: add tests for X")
+
+	require.Len(t, builder.Commits, 2)
+	assert.Equal(t, "abc1234", builder.Commits[0].Hash)
+	assert.Equal(t, "feat: add feature X", builder.Commits[0].Message)
+	assert.Equal(t, "def5678", builder.Commits[1].Hash)
+}
+
+func TestProgressEntryBuilderAddNote(t *testing.T) {
+	builder := NewProgressEntryBuilder(1)
+
+	builder.AddNote("Consider refactoring later").
+		AddNote("Performance could be improved")
+
+	require.Len(t, builder.NotesForNextSession, 2)
+	assert.Equal(t, "Consider refactoring later", builder.NotesForNextSession[0])
+}
+
+func TestProgressEntryBuilderBuild(t *testing.T) {
+	builder := NewProgressEntryBuilder(3)
+
+	feature := &progress.FeatureRef{
+		ID:          "feat-005",
+		Description: "User authentication",
+	}
+
+	builder.SetStartingState(15, 4, feature).
+		AddWorkDone("Added login endpoint").
+		AddWorkDone("Added JWT validation").
+		SetTestResult("go test ./...", true, "All tests passed").
+		AddCommit("abc123", "feat: add authentication").
+		AddNote("Consider adding refresh tokens")
+
+	entry := builder.Build(15, 5, true)
+
+	// Check entry fields
+	assert.Equal(t, 3, entry.Iteration)
+	assert.NotZero(t, entry.Timestamp)
+
+	// Starting state
+	assert.Equal(t, 15, entry.StartingState.FeaturesTotal)
+	assert.Equal(t, 4, entry.StartingState.FeaturesPassing)
+	assert.Equal(t, "feat-005", entry.StartingState.WorkingOn.ID)
+
+	// Work done
+	require.Len(t, entry.WorkDone, 2)
+	assert.Equal(t, "Added login endpoint", entry.WorkDone[0])
+
+	// Testing
+	assert.Equal(t, "go test ./...", entry.Testing.Command)
+	assert.True(t, entry.Testing.Passed)
+
+	// Commits
+	require.Len(t, entry.Commits, 1)
+	assert.Equal(t, "abc123", entry.Commits[0].Hash)
+
+	// Ending state
+	assert.Equal(t, 15, entry.EndingState.FeaturesTotal)
+	assert.Equal(t, 5, entry.EndingState.FeaturesPassing)
+	assert.Equal(t, "feat-005", entry.EndingState.WorkingOn.ID)
+	assert.True(t, entry.EndingState.AllTestsPassing)
+
+	// Notes
+	require.Len(t, entry.NotesForNextSession, 1)
+	assert.Equal(t, "Consider adding refresh tokens", entry.NotesForNextSession[0])
+}
+
+func TestOrchestratorStartProgressEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a PRD file
+	prdContent := `{
+		"name": "Test Project",
+		"description": "Test",
+		"testCommand": "go test ./...",
+		"features": [
+			{"id": "feat-001", "category": "functional", "priority": "high", "description": "First feature", "steps": ["step1"], "passes": true},
+			{"id": "feat-002", "category": "functional", "priority": "high", "description": "Second feature", "steps": ["step1"], "passes": false}
+		]
+	}`
+	err := os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(prdContent), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+
+	// Load PRD
+	currentPRD, err := prd.LoadFromDir(tmpDir)
+	require.NoError(t, err)
+
+	// Start progress entry
+	orch.StartProgressEntry(1, currentPRD)
+
+	require.True(t, orch.HasProgressEntry())
+	entry := orch.GetCurrentProgressEntry()
+	require.NotNil(t, entry)
+
+	assert.Equal(t, 1, entry.Iteration)
+	assert.Equal(t, 2, entry.StartingState.FeaturesTotal)
+	assert.Equal(t, 1, entry.StartingState.FeaturesPassing)
+	require.NotNil(t, entry.CurrentFeature)
+	assert.Equal(t, "feat-002", entry.CurrentFeature.ID)
+}
+
+func TestOrchestratorAddProgressWork(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// Without an entry, should not panic
+	orch.AddProgressWork("This should not crash")
+
+	// Create an entry
+	orch.currentEntry = NewProgressEntryBuilder(1)
+
+	orch.AddProgressWork("Implemented feature")
+	orch.AddProgressWork("Added tests")
+
+	require.Len(t, orch.currentEntry.WorkDone, 2)
+}
+
+func TestOrchestratorSetProgressTestResult(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// Without an entry, should not panic
+	orch.SetProgressTestResult("go test ./...", true, "passed")
+
+	// Create an entry
+	orch.currentEntry = NewProgressEntryBuilder(1)
+
+	orch.SetProgressTestResult("go test ./...", true, "47 tests passed")
+
+	assert.Equal(t, "go test ./...", orch.currentEntry.Testing.Command)
+	assert.True(t, orch.currentEntry.Testing.Passed)
+}
+
+func TestOrchestratorAddProgressCommit(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// Without an entry, should not panic
+	orch.AddProgressCommit("abc123", "test")
+
+	// Create an entry
+	orch.currentEntry = NewProgressEntryBuilder(1)
+
+	orch.AddProgressCommit("abc123", "feat: add feature")
+	orch.AddProgressCommit("def456", "test: add tests")
+
+	require.Len(t, orch.currentEntry.Commits, 2)
+	assert.Equal(t, "abc123", orch.currentEntry.Commits[0].Hash)
+}
+
+func TestOrchestratorAddProgressNote(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// Without an entry, should not panic
+	orch.AddProgressNote("test note")
+
+	// Create an entry
+	orch.currentEntry = NewProgressEntryBuilder(1)
+
+	orch.AddProgressNote("Consider refactoring")
+
+	require.Len(t, orch.currentEntry.NotesForNextSession, 1)
+}
+
+func TestOrchestratorFinishProgressEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a PRD file
+	prdContent := `{
+		"name": "Test Project",
+		"description": "Test",
+		"testCommand": "go test ./...",
+		"features": [
+			{"id": "feat-001", "category": "functional", "priority": "high", "description": "First feature", "steps": ["step1"], "passes": true},
+			{"id": "feat-002", "category": "functional", "priority": "high", "description": "Second feature", "steps": ["step1"], "passes": true}
+		]
+	}`
+	err := os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(prdContent), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+
+	// Load PRD
+	currentPRD, err := prd.LoadFromDir(tmpDir)
+	require.NoError(t, err)
+
+	// Without an entry, should return nil (no-op)
+	err = orch.FinishProgressEntry(currentPRD, true)
+	require.NoError(t, err)
+
+	// Create and populate an entry
+	orch.currentEntry = NewProgressEntryBuilder(1)
+	orch.currentEntry.SetStartingState(2, 1, &progress.FeatureRef{ID: "feat-002", Description: "Second"})
+	orch.AddProgressWork("Implemented feature")
+	orch.SetProgressTestResult("go test ./...", true, "passed")
+	orch.AddProgressCommit("abc123", "feat: add feature")
+
+	// Finish the entry
+	err = orch.FinishProgressEntry(currentPRD, true)
+	require.NoError(t, err)
+
+	// Entry should be cleared
+	assert.False(t, orch.HasProgressEntry())
+
+	// Progress file should exist and contain the entry
+	progressPath := filepath.Join(tmpDir, "progress.txt")
+	assert.FileExists(t, progressPath)
+
+	content, err := os.ReadFile(progressPath)
+	require.NoError(t, err)
+
+	contentStr := string(content)
+	assert.Contains(t, contentStr, "Iteration: 1")
+	assert.Contains(t, contentStr, "Features passing: 1/2")
+	assert.Contains(t, contentStr, "Implemented feature")
+	assert.Contains(t, contentStr, "abc123")
+	assert.Contains(t, contentStr, "All tests passing: YES")
+}
+
+func TestOrchestratorProgressFileGrowsAcrossIterations(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a PRD file with multiple features
+	prdContent := `{
+		"name": "Test Project",
+		"description": "Test",
+		"testCommand": "go test ./...",
+		"features": [
+			{"id": "feat-001", "category": "functional", "priority": "high", "description": "Feature 1", "steps": ["step1"], "passes": false},
+			{"id": "feat-002", "category": "functional", "priority": "high", "description": "Feature 2", "steps": ["step1"], "passes": false},
+			{"id": "feat-003", "category": "functional", "priority": "high", "description": "Feature 3", "steps": ["step1"], "passes": false}
+		]
+	}`
+	err := os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(prdContent), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+
+	// Simulate 3 iterations
+	for i := 1; i <= 3; i++ {
+		currentPRD, err := prd.LoadFromDir(tmpDir)
+		require.NoError(t, err)
+
+		orch.StartProgressEntry(i, currentPRD)
+		orch.AddProgressWork("Implemented feature " + currentPRD.NextFeature().ID)
+		orch.SetProgressTestResult("go test ./...", true, "passed")
+		orch.AddProgressCommit("commit"+string(rune('0'+i)), "feat: add feature")
+
+		err = orch.FinishProgressEntry(currentPRD, true)
+		require.NoError(t, err)
+
+		// Mark the feature as passing for next iteration
+		nextFeature := currentPRD.NextFeature()
+		if nextFeature != nil {
+			nextFeature.Passes = true
+			prdData, _ := json.MarshalIndent(currentPRD, "", "  ")
+			os.WriteFile(filepath.Join(tmpDir, "prd.json"), prdData, 0644)
+		}
+	}
+
+	// Verify progress file contains all 3 iterations
+	content, err := os.ReadFile(filepath.Join(tmpDir, "progress.txt"))
+	require.NoError(t, err)
+
+	contentStr := string(content)
+	assert.Contains(t, contentStr, "Iteration: 1")
+	assert.Contains(t, contentStr, "Iteration: 2")
+	assert.Contains(t, contentStr, "Iteration: 3")
+
+	// Count occurrences of session separator
+	separatorCount := strings.Count(contentStr, "================================================================================")
+	assert.GreaterOrEqual(t, separatorCount, 6) // 2 separators per entry minimum
+}
+
+func TestProgressEntryBuilderNilFeature(t *testing.T) {
+	builder := NewProgressEntryBuilder(1)
+
+	// Setting starting state with nil feature should work
+	result := builder.SetStartingState(5, 2, nil)
+	assert.Equal(t, builder, result)
+
+	assert.Nil(t, builder.StartingState.WorkingOn)
+	assert.Nil(t, builder.CurrentFeature)
+
+	// Build should work with nil feature
+	entry := builder.Build(5, 3, true)
+	assert.Nil(t, entry.EndingState.WorkingOn)
+}
+
+func TestOrchestratorStartProgressEntryAllComplete(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a PRD where all features are complete
+	prdContent := `{
+		"name": "Test Project",
+		"description": "Test",
+		"testCommand": "go test ./...",
+		"features": [
+			{"id": "feat-001", "category": "functional", "priority": "high", "description": "Feature 1", "steps": ["step1"], "passes": true}
+		]
+	}`
+	err := os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(prdContent), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+
+	currentPRD, err := prd.LoadFromDir(tmpDir)
+	require.NoError(t, err)
+
+	// Start progress entry when no features are pending
+	orch.StartProgressEntry(1, currentPRD)
+
+	assert.True(t, orch.HasProgressEntry())
+	entry := orch.GetCurrentProgressEntry()
+	// Feature should be nil since NextFeature() returns nil
+	assert.Nil(t, entry.CurrentFeature)
 }

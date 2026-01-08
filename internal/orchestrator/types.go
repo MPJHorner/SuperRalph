@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/mpjhorner/superralph/internal/progress"
 )
 
 // Action represents what Claude wants to do next
@@ -620,4 +623,104 @@ The orchestrator will restart you with fresh context for the next iteration.
 - The orchestrator handles looping - you handle one feature
 
 This "clean slate" approach ensures each iteration starts fresh without accumulated context.`
+}
+
+// ProgressEntryBuilder helps construct progress entries incrementally during an iteration.
+// It accumulates work done, test results, and commits throughout the iteration,
+// then produces a complete progress.Entry when the iteration completes.
+type ProgressEntryBuilder struct {
+	// Timestamp when the iteration started
+	Timestamp time.Time
+
+	// Iteration number
+	Iteration int
+
+	// Starting state captured at iteration start
+	StartingState progress.State
+
+	// WorkDone accumulates descriptions of work performed
+	WorkDone []string
+
+	// Testing holds the most recent test result
+	Testing progress.TestResult
+
+	// Commits accumulates git commits made during this iteration
+	Commits []progress.Commit
+
+	// NotesForNextSession accumulates notes for future iterations
+	NotesForNextSession []string
+
+	// CurrentFeature is the feature being worked on
+	CurrentFeature *progress.FeatureRef
+}
+
+// NewProgressEntryBuilder creates a new builder initialized with current timestamp
+func NewProgressEntryBuilder(iteration int) *ProgressEntryBuilder {
+	return &ProgressEntryBuilder{
+		Timestamp: time.Now().UTC(),
+		Iteration: iteration,
+		WorkDone:  []string{},
+		Commits:   []progress.Commit{},
+	}
+}
+
+// SetStartingState sets the starting state from PRD stats
+func (b *ProgressEntryBuilder) SetStartingState(total, passing int, feature *progress.FeatureRef) *ProgressEntryBuilder {
+	b.StartingState = progress.State{
+		FeaturesTotal:   total,
+		FeaturesPassing: passing,
+		WorkingOn:       feature,
+	}
+	b.CurrentFeature = feature
+	return b
+}
+
+// AddWorkDone adds a work item description
+func (b *ProgressEntryBuilder) AddWorkDone(work string) *ProgressEntryBuilder {
+	b.WorkDone = append(b.WorkDone, work)
+	return b
+}
+
+// SetTestResult sets the test result
+func (b *ProgressEntryBuilder) SetTestResult(command string, passed bool, details string) *ProgressEntryBuilder {
+	b.Testing = progress.TestResult{
+		Command: command,
+		Passed:  passed,
+		Details: details,
+	}
+	return b
+}
+
+// AddCommit adds a git commit
+func (b *ProgressEntryBuilder) AddCommit(hash, message string) *ProgressEntryBuilder {
+	b.Commits = append(b.Commits, progress.Commit{
+		Hash:    hash,
+		Message: message,
+	})
+	return b
+}
+
+// AddNote adds a note for the next session
+func (b *ProgressEntryBuilder) AddNote(note string) *ProgressEntryBuilder {
+	b.NotesForNextSession = append(b.NotesForNextSession, note)
+	return b
+}
+
+// Build creates the final progress.Entry with ending state
+func (b *ProgressEntryBuilder) Build(endTotal, endPassing int, allTestsPassing bool) progress.Entry {
+	return progress.Entry{
+		Timestamp:     b.Timestamp,
+		Iteration:     b.Iteration,
+		StartingState: b.StartingState,
+		WorkDone:      b.WorkDone,
+		Testing:       b.Testing,
+		Commits:       b.Commits,
+		EndingState: progress.State{
+			FeaturesTotal:   endTotal,
+			FeaturesPassing: endPassing,
+			WorkingOn:       b.CurrentFeature,
+			AllTestsPassing: allTestsPassing,
+		},
+		NotesForNextSession: b.NotesForNextSession,
+	}
 }
