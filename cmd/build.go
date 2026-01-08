@@ -8,14 +8,16 @@ import (
 	"strconv"
 	"syscall"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/mpjhorner/superralph/internal/git"
 	"github.com/mpjhorner/superralph/internal/notify"
 	"github.com/mpjhorner/superralph/internal/orchestrator"
 	"github.com/mpjhorner/superralph/internal/prd"
+	"github.com/mpjhorner/superralph/internal/tui"
+	"github.com/mpjhorner/superralph/internal/tui/components"
 )
 
 var buildDebug bool
@@ -43,17 +45,10 @@ func init() {
 	rootCmd.AddCommand(buildCmd)
 }
 
-// Styles for the build session
-var (
-	phaseStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	fileStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	cmdStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("171"))
-)
-
 func runBuild(cmd *cobra.Command, args []string) {
 	// Check if prd.json exists
 	if !prd.ExistsInCurrentDir() {
-		fmt.Println(errorStyle.Render("✗") + " prd.json not found in current directory")
+		fmt.Println(errorStyle.Render("x") + " prd.json not found in current directory")
 		fmt.Println(dimStyle.Render("  Run 'superralph plan' to create one"))
 		os.Exit(1)
 	}
@@ -61,7 +56,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 	// Load the PRD
 	p, err := prd.LoadFromCurrentDir()
 	if err != nil {
-		fmt.Println(errorStyle.Render("✗") + " Failed to load prd.json")
+		fmt.Println(errorStyle.Render("x") + " Failed to load prd.json")
 		fmt.Println(dimStyle.Render("  " + err.Error()))
 		os.Exit(1)
 	}
@@ -69,32 +64,32 @@ func runBuild(cmd *cobra.Command, args []string) {
 	// Validate the PRD
 	result := prd.Validate(p)
 	if !result.Valid {
-		fmt.Println(errorStyle.Render("✗") + " prd.json has validation errors:\n")
+		fmt.Println(errorStyle.Render("x") + " prd.json has validation errors:\n")
 		for _, e := range result.Errors {
-			fmt.Printf("  %s %s\n", errorStyle.Render("•"), e.Error())
+			fmt.Printf("  %s %s\n", errorStyle.Render("*"), e.Error())
 		}
 		os.Exit(1)
 	}
 
-	fmt.Println(successStyle.Render("✓") + " PRD validated: " + p.Name)
+	fmt.Println(successStyle.Render("ok") + " PRD validated: " + p.Name)
 	stats := p.Stats()
 	fmt.Printf("  %d/%d features passing\n\n", stats.PassingFeatures, stats.TotalFeatures)
 
 	// Check if already complete
 	if p.IsComplete() {
-		fmt.Println(successStyle.Render("✓") + " All features already complete!")
+		fmt.Println(successStyle.Render("ok") + " All features already complete!")
 		os.Exit(0)
 	}
 
 	// Ensure git repo exists
 	created, err := git.EnsureRepoCurrentDir()
 	if err != nil {
-		fmt.Println(errorStyle.Render("✗") + " Failed to initialize git repository")
+		fmt.Println(errorStyle.Render("x") + " Failed to initialize git repository")
 		fmt.Println(dimStyle.Render("  " + err.Error()))
 		os.Exit(1)
 	}
 	if created {
-		fmt.Println(successStyle.Render("✓") + " Initialized git repository")
+		fmt.Println(successStyle.Render("ok") + " Initialized git repository")
 	}
 
 	// Prompt for confirmation
@@ -122,71 +117,19 @@ func runBuild(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	fmt.Println()
-	fmt.Println(boldStyle.Render("Starting Build Session"))
-	fmt.Println(dimStyle.Render(fmt.Sprintf("Max iterations: %d | Test command: %s", maxIterations, p.TestCommand)))
-	fmt.Println(dimStyle.Render("Press Ctrl+C to cancel at any time."))
-	fmt.Println()
-
 	// Get working directory
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Println(errorStyle.Render("✗") + " Failed to get current directory")
+		fmt.Println(errorStyle.Render("x") + " Failed to get current directory")
 		os.Exit(1)
 	}
 
-	// Track state for display
-	var currentFeature string
-	var currentPhase string
+	// Create the TUI model
+	model := tui.NewModel(p, "prd.json", maxIterations)
+	model.SetDebugMode(buildDebug)
 
-	// Create the orchestrator
-	orch := orchestrator.New(cwd).
-		SetDebug(buildDebug).
-		OnMessage(func(role, content string) {
-			if role == "assistant" && content != "" {
-				fmt.Println()
-				fmt.Println(content)
-			}
-		}).
-		OnThinking(func(thinking string) {
-			if buildDebug {
-				fmt.Println()
-				fmt.Println(thinkingStyle.Render("Thinking: " + thinking))
-			}
-		}).
-		OnDebug(func(msg string) {
-			if buildDebug {
-				fmt.Println(dimStyle.Render("[debug] " + msg))
-			}
-		}).
-		OnAction(func(action orchestrator.Action, params orchestrator.ActionParams) {
-			switch action {
-			case orchestrator.ActionReadFiles:
-				for _, path := range params.Paths {
-					fmt.Println(dimStyle.Render("  Reading: ") + fileStyle.Render(path))
-				}
-			case orchestrator.ActionWriteFile:
-				fmt.Println(dimStyle.Render("  Writing: ") + fileStyle.Render(params.Path))
-			case orchestrator.ActionRunCommand:
-				fmt.Println(dimStyle.Render("  Running: ") + cmdStyle.Render(params.Command))
-			case orchestrator.ActionDone:
-				fmt.Println()
-				fmt.Println(successStyle.Render("✓") + " Build complete!")
-			}
-		}).
-		OnState(func(state any) {
-			if bs, ok := state.(*orchestrator.BuildState); ok {
-				if bs.Phase != currentPhase {
-					currentPhase = bs.Phase
-					fmt.Println()
-					fmt.Println(phaseStyle.Render("Phase: " + currentPhase))
-				}
-				if bs.CurrentFeature != currentFeature {
-					currentFeature = bs.CurrentFeature
-					fmt.Println(dimStyle.Render("Feature: ") + boldStyle.Render(currentFeature))
-				}
-			}
-		})
+	// Create the Bubble Tea program with alternate screen buffer
+	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	// Set up signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -194,44 +137,173 @@ func runBuild(cmd *cobra.Command, args []string) {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		fmt.Println("\n\nCanceling build...")
-		cancel()
-	}()
 
-	// Run the build session
-	err = orch.RunBuild(ctx)
-	if err != nil {
-		if ctx.Err() != nil {
-			fmt.Println()
-			fmt.Println(warnStyle.Render("⚠") + " Build canceled")
-			_ = notify.Send("SuperRalph", "Build canceled by user")
-			os.Exit(0)
+	// Track current iteration for display
+	currentIteration := 0
+
+	// Create the orchestrator with callbacks that send messages to the TUI
+	orch := orchestrator.New(cwd).
+		SetDebug(buildDebug).
+		OnMessage(func(role, content string) {
+			if role == "assistant" && content != "" {
+				program.Send(tui.LogMsg(content))
+			}
+		}).
+		OnThinking(func(thinking string) {
+			if buildDebug {
+				program.Send(tui.LogMsg("[thinking] " + thinking))
+			}
+		}).
+		OnDebug(func(msg string) {
+			if buildDebug {
+				program.Send(tui.LogMsg("[debug] " + msg))
+			}
+		}).
+		OnOutput(func(line string) {
+			program.Send(tui.LogMsg(line))
+		}).
+		OnAction(func(action orchestrator.Action, params orchestrator.ActionParams) {
+			switch action {
+			case orchestrator.ActionReadFiles:
+				for _, path := range params.Paths {
+					program.Send(tui.ActionAddMsg{
+						Action: components.ActionItem{
+							ID:          fmt.Sprintf("read-%s", path),
+							Type:        "read",
+							Description: "Reading: " + path,
+							Status:      components.StatusRunning,
+						},
+					})
+				}
+			case orchestrator.ActionWriteFile:
+				program.Send(tui.ActionAddMsg{
+					Action: components.ActionItem{
+						ID:          fmt.Sprintf("write-%s", params.Path),
+						Type:        "write",
+						Description: "Writing: " + params.Path,
+						Status:      components.StatusRunning,
+					},
+				})
+			case orchestrator.ActionRunCommand:
+				program.Send(tui.ActionAddMsg{
+					Action: components.ActionItem{
+						ID:          fmt.Sprintf("cmd-%d", currentIteration),
+						Type:        "command",
+						Description: "Running: " + params.Command,
+						Status:      components.StatusRunning,
+					},
+				})
+			case orchestrator.ActionDone:
+				program.Send(tui.LogMsg("Build complete!"))
+			}
+		}).
+		OnState(func(state any) {
+			if bs, ok := state.(*orchestrator.BuildState); ok {
+				// Update iteration
+				if bs.Iteration != currentIteration {
+					currentIteration = bs.Iteration
+					program.Send(tui.IterationStartMsg{
+						Iteration: bs.Iteration,
+						Feature:   nil, // Will be set when we know the feature
+					})
+				}
+
+				// Map orchestrator phase to TUI phase
+				var tuiPhase components.Phase
+				switch bs.Phase {
+				case "planning":
+					tuiPhase = components.PhasePlanning
+				case "validating":
+					tuiPhase = components.PhaseValidating
+				case "executing":
+					tuiPhase = components.PhaseExecuting
+				case "complete":
+					tuiPhase = components.PhaseComplete
+				default:
+					tuiPhase = components.PhaseNone
+				}
+				program.Send(tui.PhaseChangeMsg{Phase: tuiPhase})
+
+				// Log phase changes
+				if bs.Phase != "" {
+					program.Send(tui.LogMsg(fmt.Sprintf("Phase: %s", bs.Phase)))
+				}
+				if bs.CurrentFeature != "" {
+					program.Send(tui.LogMsg(fmt.Sprintf("Feature: %s", bs.CurrentFeature)))
+				}
+			}
+		})
+
+	// Set up TUI callbacks
+	model.OnQuit = func() {
+		cancel()
+	}
+	model.OnPause = func() {
+		// Could implement pause logic here
+		program.Send(tui.LogMsg("Build paused"))
+	}
+	model.OnResume = func() {
+		// Could implement resume logic here
+		program.Send(tui.LogMsg("Build resumed"))
+	}
+	model.OnDebug = func(enabled bool) {
+		orch.SetDebug(enabled)
+		if enabled {
+			program.Send(tui.LogMsg("Debug mode enabled"))
+		} else {
+			program.Send(tui.LogMsg("Debug mode disabled"))
 		}
-		fmt.Println()
-		fmt.Println(errorStyle.Render("✗") + " Build failed")
-		fmt.Println(dimStyle.Render("  " + err.Error()))
-		_ = notify.SendError("Build failed: " + err.Error())
-		os.Exit(1)
 	}
 
-	// Check final state
-	p, err = prd.LoadFromCurrentDir()
-	if err == nil {
-		stats := p.Stats()
-		if p.IsComplete() {
-			fmt.Println()
-			fmt.Println(successStyle.Render("✓") + " All features complete!")
-			_ = notify.SendSuccess("PRD complete! All features implemented.")
+	// Run the orchestrator in a goroutine
+	go func() {
+		// Handle signals
+		go func() {
+			<-sigChan
+			cancel()
+			program.Send(tui.LogMsg("Canceling build..."))
+			program.Send(tui.BuildCompleteMsg{Success: false, Error: fmt.Errorf("canceled by user")})
+		}()
+
+		// Set state to running
+		program.Send(tui.StateChangeMsg(tui.StateRunning))
+
+		// Run the build
+		err := orch.RunBuild(ctx)
+
+		if err != nil {
+			if ctx.Err() != nil {
+				// Canceled
+				program.Send(tui.LogMsg("Build canceled"))
+				program.Send(tui.BuildCompleteMsg{Success: false, Error: nil})
+				_ = notify.Send("SuperRalph", "Build canceled by user")
+			} else {
+				// Error
+				program.Send(tui.LogMsg("Build failed: " + err.Error()))
+				program.Send(tui.BuildCompleteMsg{Success: false, Error: err})
+				_ = notify.SendError("Build failed: " + err.Error())
+			}
 		} else {
-			fmt.Println()
-			fmt.Printf("%s %d/%d features complete\n",
-				warnStyle.Render("⚠"),
-				stats.PassingFeatures,
-				stats.TotalFeatures)
-			fmt.Println(dimStyle.Render("  Run 'superralph build' again to continue"))
-			_ = notify.Send("SuperRalph", fmt.Sprintf("Build paused: %d/%d features complete", stats.PassingFeatures, stats.TotalFeatures))
+			// Success - reload PRD to check status
+			p, err := prd.LoadFromCurrentDir()
+			if err == nil {
+				program.Send(tui.PRDUpdateMsg{PRD: p, Stats: p.Stats()})
+				if p.IsComplete() {
+					program.Send(tui.LogMsg("All features complete!"))
+					_ = notify.SendSuccess("PRD complete! All features implemented.")
+				} else {
+					stats := p.Stats()
+					program.Send(tui.LogMsg(fmt.Sprintf("%d/%d features complete", stats.PassingFeatures, stats.TotalFeatures)))
+					_ = notify.Send("SuperRalph", fmt.Sprintf("Build paused: %d/%d features complete", stats.PassingFeatures, stats.TotalFeatures))
+				}
+			}
+			program.Send(tui.BuildCompleteMsg{Success: true, Error: nil})
 		}
+	}()
+
+	// Run the TUI (blocks until quit)
+	if _, err := program.Run(); err != nil {
+		fmt.Println(errorStyle.Render("x") + " TUI error: " + err.Error())
+		os.Exit(1)
 	}
 }

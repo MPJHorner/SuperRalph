@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -371,4 +372,40 @@ func TestModelUpdateError(t *testing.T) {
 
 	assert.Equal(t, StateError, m2.State, "State should be StateError")
 	assert.Equal(t, "Something went wrong", m2.ErrorMsg, "ErrorMsg should be 'Something went wrong'")
+}
+
+func TestModelUpdateBuildComplete(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+	m.State = StateRunning
+
+	// Test successful completion
+	newModel, _ := m.Update(BuildCompleteMsg{Success: true, Error: nil})
+	m2 := newModel.(Model)
+
+	assert.Equal(t, StateComplete, m2.State, "State should be StateComplete on success")
+	assert.Empty(t, m2.ErrorMsg, "ErrorMsg should be empty on success")
+
+	// Test failed completion
+	m3 := NewModel(p, "prd.json", 10)
+	m3.State = StateRunning
+
+	newModel, _ = m3.Update(BuildCompleteMsg{Success: false, Error: fmt.Errorf("build failed")})
+	m4 := newModel.(Model)
+
+	assert.Equal(t, StateError, m4.State, "State should be StateError on failure")
+	assert.Equal(t, "build failed", m4.ErrorMsg, "ErrorMsg should contain error message")
+}
+
+func TestModelUpdateBuildCompleteNoError(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+	m.State = StateRunning
+
+	// Test failed completion without error (e.g., canceled)
+	newModel, _ := m.Update(BuildCompleteMsg{Success: false, Error: nil})
+	m2 := newModel.(Model)
+
+	assert.Equal(t, StateError, m2.State, "State should be StateError on failure")
+	assert.Empty(t, m2.ErrorMsg, "ErrorMsg should be empty when no error provided")
 }

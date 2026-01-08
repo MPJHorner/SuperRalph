@@ -159,6 +159,12 @@ type (
 
 	// DebugToggleMsg toggles debug mode
 	DebugToggleMsg struct{}
+
+	// BuildCompleteMsg signals that the build has finished
+	BuildCompleteMsg struct {
+		Success bool
+		Error   error
+	}
 )
 
 // Init initializes the model
@@ -270,6 +276,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.DebugMode = !m.DebugMode
 		if m.OnDebug != nil {
 			m.OnDebug(m.DebugMode)
+		}
+
+	case BuildCompleteMsg:
+		if msg.Success {
+			m.State = StateComplete
+		} else {
+			m.State = StateError
+			if msg.Error != nil {
+				m.ErrorMsg = msg.Error.Error()
+			}
 		}
 	}
 
