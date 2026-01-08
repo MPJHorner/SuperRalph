@@ -18,6 +18,7 @@ const (
 	LogTypeSuccess    LogEntryType = "success"     // Green - Success messages
 	LogTypeError      LogEntryType = "error"       // Red - Errors
 	LogTypeInfo       LogEntryType = "info"        // Muted - Info/status
+	LogTypeDiff       LogEntryType = "diff"        // Special - File diff display
 )
 
 // LogEntry represents a single log entry with type information
@@ -35,6 +36,7 @@ var (
 	logColorSuccess    = lipgloss.Color("42")  // Green
 	logColorError      = lipgloss.Color("196") // Red
 	logColorInfo       = lipgloss.Color("245") // Muted gray
+	logColorDiff       = lipgloss.Color("214") // Orange - diff indicator
 )
 
 // LogView displays a scrolling log of output with colored entries
@@ -109,6 +111,8 @@ func styleForType(entryType LogEntryType) lipgloss.Style {
 		return lipgloss.NewStyle().Foreground(logColorError).Bold(true)
 	case LogTypeInfo:
 		return lipgloss.NewStyle().Foreground(logColorInfo)
+	case LogTypeDiff:
+		return lipgloss.NewStyle().Foreground(logColorDiff).Bold(true)
 	default:
 		return lipgloss.NewStyle().Foreground(logColorText)
 	}
@@ -131,6 +135,8 @@ func prefixForType(entryType LogEntryType) string {
 		return "! "
 	case LogTypeInfo:
 		return "- "
+	case LogTypeDiff:
+		return "~ "
 	default:
 		return ""
 	}

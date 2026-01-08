@@ -61,6 +61,7 @@ type Orchestrator struct {
 	onTypedOutput func(outputType OutputType, content string)
 	onActivity    func(activity string) // Current activity summary (e.g., "Reading src/main.go")
 	onStep        func(step Step)       // Current step in the iteration
+	onFileDiff    func(diff *FileDiff)  // File diff callback for visual diffs
 	promptUser    func(question string) (string, error)
 }
 
@@ -171,6 +172,12 @@ func (o *Orchestrator) OnActivity(fn func(activity string)) *Orchestrator {
 // OnStep sets the callback for step changes
 func (o *Orchestrator) OnStep(fn func(step Step)) *Orchestrator {
 	o.onStep = fn
+	return o
+}
+
+// OnFileDiff sets the callback for file diff notifications
+func (o *Orchestrator) OnFileDiff(fn func(diff *FileDiff)) *Orchestrator {
+	o.onFileDiff = fn
 	return o
 }
 
@@ -1066,6 +1073,10 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 	buf := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buf, 10*1024*1024)
 
+	// Track pending file writes for diff generation
+	// Maps tool_use_id to pending write info
+	pendingWrites := make(map[string]*pendingFileWrite)
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -1101,6 +1112,7 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 									o.typedOutput(OutputText, text)
 								}
 							case "tool_use":
+								toolUseID, _ := blockMap["id"].(string)
 								if name, ok := blockMap["name"].(string); ok {
 									o.typedOutput(OutputToolUse, fmt.Sprintf("Using tool: %s", name))
 									if input, ok := blockMap["input"].(map[string]any); ok {
@@ -1116,12 +1128,36 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 											o.activity(fmt.Sprintf("%s: %s", name, path))
 											// Detect step from file operation
 											o.detectStepFromFileOp(name, path)
+
+											// Capture file content before Write/Edit for diff
+											if name == "Write" || name == "Edit" {
+												oldContent, isNew := o.captureFileContent(path)
+												if toolUseID != "" {
+													pendingWrites[toolUseID] = &pendingFileWrite{
+														filePath:   path,
+														oldContent: oldContent,
+														isNewFile:  isNew,
+													}
+												}
+											}
 										}
 										if filePath, ok := input["filePath"].(string); ok {
 											o.typedOutput(OutputToolInput, "> "+filePath)
 											o.activity(fmt.Sprintf("%s: %s", name, filePath))
 											// Detect step from file operation
 											o.detectStepFromFileOp(name, filePath)
+
+											// Capture file content before Write/Edit for diff
+											if name == "Write" || name == "Edit" {
+												oldContent, isNew := o.captureFileContent(filePath)
+												if toolUseID != "" {
+													pendingWrites[toolUseID] = &pendingFileWrite{
+														filePath:   filePath,
+														oldContent: oldContent,
+														isNewFile:  isNew,
+													}
+												}
+											}
 										}
 									}
 								}
@@ -1138,6 +1174,17 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 					for _, block := range content {
 						if blockMap, ok := block.(map[string]any); ok {
 							if blockMap["type"] == "tool_result" {
+								// Check if this is a result for a pending write
+								toolUseID, _ := blockMap["tool_use_id"].(string)
+								if pending, ok := pendingWrites[toolUseID]; ok {
+									// Generate and emit the diff
+									diff := o.generateFileDiff(pending)
+									if diff != nil {
+										o.emitFileDiff(diff)
+									}
+									delete(pendingWrites, toolUseID)
+								}
+
 								// Show truncated tool result
 								if contentStr, ok := blockMap["content"].(string); ok {
 									lines := strings.Split(contentStr, "\n")
@@ -1217,6 +1264,113 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// pendingFileWrite tracks a file write operation that's in progress
+type pendingFileWrite struct {
+	filePath   string
+	oldContent string
+	isNewFile  bool
+}
+
+// captureFileContent reads a file's current content for diff generation
+// Returns the content and whether the file exists (is new)
+func (o *Orchestrator) captureFileContent(filePath string) (content string, isNewFile bool) {
+	fullPath := filePath
+	if !filepath.IsAbs(filePath) {
+		fullPath = filepath.Join(o.workDir, filePath)
+	}
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		// File doesn't exist - this is a new file
+		return "", true
+	}
+	return string(data), false
+}
+
+// generateFileDiff creates a FileDiff by reading the file's current content
+// and comparing with the stored old content
+func (o *Orchestrator) generateFileDiff(pending *pendingFileWrite) *FileDiff {
+	fullPath := pending.filePath
+	if !filepath.IsAbs(pending.filePath) {
+		fullPath = filepath.Join(o.workDir, pending.filePath)
+	}
+
+	newContent, err := os.ReadFile(fullPath)
+	if err != nil {
+		o.debugLog("Failed to read file for diff: %v", err)
+		return nil
+	}
+
+	// Compute added/removed lines using line-by-line comparison
+	added, removed := computeLineCounts(pending.oldContent, string(newContent))
+
+	return &FileDiff{
+		FilePath:     pending.filePath,
+		OldContent:   pending.oldContent,
+		NewContent:   string(newContent),
+		AddedLines:   added,
+		RemovedLines: removed,
+		IsNewFile:    pending.isNewFile,
+	}
+}
+
+// computeLineCounts computes added and removed line counts using LCS
+func computeLineCounts(oldContent, newContent string) (added, removed int) {
+	oldLines := strings.Split(oldContent, "\n")
+	newLines := strings.Split(newContent, "\n")
+
+	// Handle empty content edge cases
+	if oldContent == "" {
+		oldLines = []string{}
+	}
+	if newContent == "" {
+		newLines = []string{}
+	}
+
+	// Use simple LCS-based counting
+	lcsLen := lcsLength(oldLines, newLines)
+	removed = len(oldLines) - lcsLen
+	added = len(newLines) - lcsLen
+
+	return added, removed
+}
+
+// lcsLength returns the length of the longest common subsequence
+func lcsLength(a, b []string) int {
+	m, n := len(a), len(b)
+	if m == 0 || n == 0 {
+		return 0
+	}
+
+	// Use space-optimized DP
+	prev := make([]int, n+1)
+	curr := make([]int, n+1)
+
+	for i := 1; i <= m; i++ {
+		for j := 1; j <= n; j++ {
+			if a[i-1] == b[j-1] {
+				curr[j] = prev[j-1] + 1
+			} else {
+				if prev[j] > curr[j-1] {
+					curr[j] = prev[j]
+				} else {
+					curr[j] = curr[j-1]
+				}
+			}
+		}
+		prev, curr = curr, prev
+	}
+
+	return prev[n]
+}
+
+// emitFileDiff notifies the callback of a file diff if one is set
+func (o *Orchestrator) emitFileDiff(diff *FileDiff) {
+	if o.onFileDiff != nil && diff != nil {
+		o.onFileDiff(diff)
+	}
 }
 
 // debugLog logs a debug message

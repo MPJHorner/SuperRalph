@@ -653,6 +653,27 @@ type ResumeState struct {
 // ResumeStateFile is the filename for the resume state file
 const ResumeStateFile = ".superralph/state.json"
 
+// FileDiff represents a diff of changes made to a file
+type FileDiff struct {
+	// FilePath is the path to the file that was modified
+	FilePath string `json:"file_path"`
+
+	// OldContent is the content before the modification (empty for new files)
+	OldContent string `json:"old_content,omitempty"`
+
+	// NewContent is the content after the modification
+	NewContent string `json:"new_content"`
+
+	// AddedLines is the number of lines added
+	AddedLines int `json:"added_lines"`
+
+	// RemovedLines is the number of lines removed
+	RemovedLines int `json:"removed_lines"`
+
+	// IsNewFile is true if this is a newly created file
+	IsNewFile bool `json:"is_new_file,omitempty"`
+}
+
 // ProgressEntryBuilder helps construct progress entries incrementally during an iteration.
 // It accumulates work done, test results, and commits throughout the iteration,
 // then produces a complete progress.Entry when the iteration completes.

@@ -228,6 +228,11 @@ type (
 	TabChangeMsg struct {
 		Tab components.Tab
 	}
+
+	// FileDiffMsg signals a file diff to display
+	FileDiffMsg struct {
+		Diff *orchestrator.FileDiff
+	}
 )
 
 // Init initializes the model
@@ -527,6 +532,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TabChangeMsg:
 		m.ActiveTab = msg.Tab
 		m.TabBar.SetActiveTab(msg.Tab)
+
+	case FileDiffMsg:
+		// Display the file diff in the log
+		if msg.Diff != nil {
+			m.addDiffToLog(msg.Diff)
+		}
 	}
 
 	return m, nil
@@ -851,6 +862,114 @@ func (m Model) renderHelp() string {
 func (m *Model) AddLog(line string) {
 	m.LogView.AddLine(line)
 	m.LogTab.AddLine(line)
+}
+
+// addDiffToLog formats and adds a file diff to the log views
+func (m *Model) addDiffToLog(diff *orchestrator.FileDiff) {
+	// Create a compact diff header
+	var statsStr string
+	if diff.AddedLines > 0 || diff.RemovedLines > 0 {
+		parts := []string{}
+		if diff.AddedLines > 0 {
+			parts = append(parts, fmt.Sprintf("+%d", diff.AddedLines))
+		}
+		if diff.RemovedLines > 0 {
+			parts = append(parts, fmt.Sprintf("-%d", diff.RemovedLines))
+		}
+		statsStr = " (" + strings.Join(parts, ", ") + " lines)"
+	}
+
+	prefix := "Modified"
+	if diff.IsNewFile {
+		prefix = "Created"
+	}
+
+	// Add a diff header entry
+	headerLine := fmt.Sprintf("%s: %s%s", prefix, diff.FilePath, statsStr)
+	m.LogView.AddEntry(components.LogTypeDiff, headerLine)
+	m.LogTab.AddEntry(components.LogTypeDiff, headerLine)
+
+	// For small diffs (less than 20 lines changed), show inline diff preview
+	totalChanges := diff.AddedLines + diff.RemovedLines
+	if totalChanges > 0 && totalChanges <= 20 {
+		// Generate a simple inline diff preview
+		diffLines := m.generateInlineDiff(diff.OldContent, diff.NewContent, 5)
+		for _, line := range diffLines {
+			m.LogView.AddEntry(components.LogTypeDiff, line)
+			m.LogTab.AddEntry(components.LogTypeDiff, line)
+		}
+	} else if totalChanges > 20 {
+		m.LogView.AddEntry(components.LogTypeInfo, "  (diff too large to display inline)")
+		m.LogTab.AddEntry(components.LogTypeInfo, "  (diff too large to display inline)")
+	}
+}
+
+// generateInlineDiff creates a simple inline diff preview
+func (m *Model) generateInlineDiff(oldContent, newContent string, maxLines int) []string {
+	oldLines := strings.Split(oldContent, "\n")
+	newLines := strings.Split(newContent, "\n")
+
+	if oldContent == "" {
+		oldLines = []string{}
+	}
+	if newContent == "" {
+		newLines = []string{}
+	}
+
+	var result []string
+	shown := 0
+
+	// Simple diff: show lines that differ
+	i, j := 0, 0
+	for (i < len(oldLines) || j < len(newLines)) && shown < maxLines*2 {
+		if i >= len(oldLines) {
+			// Remaining new lines are additions
+			line := newLines[j]
+			if len(line) > 60 {
+				line = line[:57] + "..."
+			}
+			result = append(result, "  + "+line)
+			j++
+			shown++
+		} else if j >= len(newLines) {
+			// Remaining old lines are removals
+			line := oldLines[i]
+			if len(line) > 60 {
+				line = line[:57] + "..."
+			}
+			result = append(result, "  - "+line)
+			i++
+			shown++
+		} else if oldLines[i] == newLines[j] {
+			// Lines match - skip (context)
+			i++
+			j++
+		} else {
+			// Lines differ
+			oldLine := oldLines[i]
+			if len(oldLine) > 60 {
+				oldLine = oldLine[:57] + "..."
+			}
+			result = append(result, "  - "+oldLine)
+			shown++
+
+			newLine := newLines[j]
+			if len(newLine) > 60 {
+				newLine = newLine[:57] + "..."
+			}
+			result = append(result, "  + "+newLine)
+			shown++
+			i++
+			j++
+		}
+	}
+
+	// If we truncated, add indicator
+	if (i < len(oldLines) || j < len(newLines)) && shown >= maxLines*2 {
+		result = append(result, "  ... (more changes)")
+	}
+
+	return result
 }
 
 // SetState sets the run state

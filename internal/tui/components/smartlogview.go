@@ -265,7 +265,30 @@ func (s *SmartLogView) applySyntaxHighlighting(entryType LogEntryType, content s
 		if isLikelyJSON(content) {
 			return s.highlightJSON(content)
 		}
+	case LogTypeDiff:
+		// Apply diff-specific highlighting
+		return s.highlightDiff(content)
 	}
+	return content
+}
+
+// highlightDiff applies diff-specific syntax highlighting
+// Lines starting with "+ " are green, "- " are red
+func (s *SmartLogView) highlightDiff(content string) string {
+	addedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	removedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+
+	trimmed := strings.TrimSpace(content)
+
+	// Check for diff line markers
+	if strings.HasPrefix(trimmed, "+ ") || strings.HasPrefix(trimmed, "+") {
+		return addedStyle.Render(content)
+	}
+	if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "-") {
+		return removedStyle.Render(content)
+	}
+
+	// Return as-is for header lines and context
 	return content
 }
 
