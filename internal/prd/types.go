@@ -1,5 +1,10 @@
 package prd
 
+import (
+	"fmt"
+	"strings"
+)
+
 // PRD represents a Product Requirements Document
 type PRD struct {
 	Name        string    `json:"name"`
@@ -16,6 +21,7 @@ type Feature struct {
 	Description string   `json:"description"`
 	Steps       []string `json:"steps"`
 	Passes      bool     `json:"passes"`
+	DependsOn   []string `json:"depends_on,omitempty"` // Optional list of feature IDs that must pass first
 }
 
 // Category represents the type of feature
@@ -146,19 +152,135 @@ func (s PRDStats) PercentComplete() float64 {
 	return float64(s.PassingFeatures) / float64(s.TotalFeatures) * 100
 }
 
-// NextFeature returns the next feature to work on (highest priority, not passing)
+// NextFeature returns the next feature to work on based on:
+// 1. Skip features with passes: true
+// 2. Skip features blocked by unmet dependencies
+// 3. Highest priority first (high > medium > low)
+// 4. ID order within same priority
 func (p *PRD) NextFeature() *Feature {
 	// Priority order: high > medium > low
 	priorities := []Priority{PriorityHigh, PriorityMedium, PriorityLow}
 
 	for _, priority := range priorities {
 		for i := range p.Features {
-			if !p.Features[i].Passes && p.Features[i].Priority == priority {
-				return &p.Features[i]
+			f := &p.Features[i]
+			if !f.Passes && f.Priority == priority && p.DependenciesMet(f) {
+				return f
 			}
 		}
 	}
 	return nil
+}
+
+// NextFeatureWithReason returns the next feature and a human-readable reason for why it was selected
+func (p *PRD) NextFeatureWithReason() (*Feature, string) {
+	next := p.NextFeature()
+	if next == nil {
+		return nil, "all features are complete"
+	}
+
+	var reasons []string
+	reasons = append(reasons, "not yet passing")
+
+	if len(next.DependsOn) > 0 {
+		reasons = append(reasons, "all dependencies met")
+	}
+
+	reasons = append(reasons, fmt.Sprintf("%s priority", next.Priority))
+
+	// Check if there are any higher-priority features that are blocked
+	blockedHigherPriority := p.getBlockedHigherPriorityFeatures(next.Priority)
+	if len(blockedHigherPriority) > 0 {
+		reasons = append(reasons, fmt.Sprintf("features %v blocked by unmet dependencies", blockedHigherPriority))
+	}
+
+	return next, fmt.Sprintf("Selected %s: %s", next.ID, strings.Join(reasons, ", "))
+}
+
+// getBlockedHigherPriorityFeatures returns IDs of features with higher priority than the given one that are blocked
+func (p *PRD) getBlockedHigherPriorityFeatures(selectedPriority Priority) []string {
+	priorityOrder := map[Priority]int{
+		PriorityHigh:   0,
+		PriorityMedium: 1,
+		PriorityLow:    2,
+	}
+	selectedOrder := priorityOrder[selectedPriority]
+
+	var blocked []string
+	for i := range p.Features {
+		f := &p.Features[i]
+		fOrder := priorityOrder[f.Priority]
+		// Only consider features with higher priority (lower order number)
+		if !f.Passes && fOrder < selectedOrder && !p.DependenciesMet(f) {
+			blocked = append(blocked, f.ID)
+		}
+	}
+	return blocked
+}
+
+// getSkippedForDependencies returns IDs of features at the given priority that are skipped due to unmet dependencies
+func (p *PRD) getSkippedForDependencies(priority Priority) []string {
+	var skipped []string
+	for i := range p.Features {
+		f := &p.Features[i]
+		if !f.Passes && f.Priority == priority && !p.DependenciesMet(f) {
+			skipped = append(skipped, f.ID)
+		}
+	}
+	return skipped
+}
+
+// DependenciesMet returns true if all dependencies of the feature have passes: true
+func (p *PRD) DependenciesMet(f *Feature) bool {
+	if len(f.DependsOn) == 0 {
+		return true
+	}
+
+	passingIDs := p.getPassingFeatureIDs()
+	for _, depID := range f.DependsOn {
+		if !passingIDs[depID] {
+			return false
+		}
+	}
+	return true
+}
+
+// getPassingFeatureIDs returns a set of feature IDs that have passes: true
+func (p *PRD) getPassingFeatureIDs() map[string]bool {
+	passing := make(map[string]bool)
+	for _, f := range p.Features {
+		if f.Passes {
+			passing[f.ID] = true
+		}
+	}
+	return passing
+}
+
+// GetBlockedFeatures returns features that are blocked by unmet dependencies
+func (p *PRD) GetBlockedFeatures() []Feature {
+	var blocked []Feature
+	for _, f := range p.Features {
+		if !f.Passes && !p.DependenciesMet(&f) {
+			blocked = append(blocked, f)
+		}
+	}
+	return blocked
+}
+
+// GetUnmetDependencies returns the IDs of dependencies that are not yet passing for a feature
+func (p *PRD) GetUnmetDependencies(f *Feature) []string {
+	if len(f.DependsOn) == 0 {
+		return nil
+	}
+
+	passingIDs := p.getPassingFeatureIDs()
+	var unmet []string
+	for _, depID := range f.DependsOn {
+		if !passingIDs[depID] {
+			unmet = append(unmet, depID)
+		}
+	}
+	return unmet
 }
 
 // IsComplete returns true if all features pass

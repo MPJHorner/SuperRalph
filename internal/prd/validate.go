@@ -88,6 +88,22 @@ func Validate(p *PRD) ValidationResult {
 		}
 	}
 
+	// Validate depends_on references (second pass, after all IDs are collected)
+	for i, f := range p.Features {
+		prefix := fmt.Sprintf("features[%d]", i)
+		for j, depID := range f.DependsOn {
+			if strings.TrimSpace(depID) == "" {
+				result.addError(fmt.Sprintf("%s.depends_on[%d]", prefix, j), "cannot be empty")
+			} else if !seenIDs[depID] {
+				result.addError(fmt.Sprintf("%s.depends_on[%d]", prefix, j),
+					fmt.Sprintf("references unknown feature '%s'", depID))
+			} else if depID == f.ID {
+				result.addError(fmt.Sprintf("%s.depends_on[%d]", prefix, j),
+					"feature cannot depend on itself")
+			}
+		}
+	}
+
 	return result
 }
 

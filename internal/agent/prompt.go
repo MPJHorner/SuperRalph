@@ -23,9 +23,14 @@ func BuildPrompt(p *prd.PRD, iteration int) string {
    - NEVER commit with failing tests
    - If your changes break existing tests, fix those too
 
-2. **ONE FEATURE PER SESSION**
-   - Find the highest-priority feature with passes: false
+2. **SMART FEATURE SELECTION**
+   - Select the next feature using this logic:
+     1. Skip features with passes: true (already done)
+     2. Skip features blocked by unmet dependencies (depends_on field)
+     3. Pick the highest priority (high > medium > low)
+     4. Within same priority, pick first by ID order
    - Implement ONLY that one feature
+   - Report which feature you selected and WHY in your response
    - Do not move to another feature until this one passes all tests
 
 3. **CLEAN STATE REQUIREMENT**
@@ -39,7 +44,8 @@ func BuildPrompt(p *prd.PRD, iteration int) string {
 1. Read prd.json and progress.txt to understand current state
 2. Run tests first to verify starting state: %s
 3. If tests are failing, FIX THEM FIRST before implementing new features
-4. Find the highest-priority feature with passes: false
+4. Find the next feature to implement using smart selection:
+   - Skip passes: true, skip blocked by unmet depends_on, pick highest priority, then ID order
 5. Implement the feature
 6. Run tests: %s
 7. If tests fail:
@@ -122,7 +128,8 @@ The prd.json file MUST follow this exact structure:
         "Step 2 to verify",
         "..."
       ],
-      "passes": false
+      "passes": false,
+      "depends_on": ["feat-000"]  // Optional: IDs of features that must pass first
     }
   ]
 }

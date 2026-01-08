@@ -33,7 +33,7 @@ func TestBuildPrompt(t *testing.T) {
 		"npm test",                    // Test command should appear multiple times
 		"Iteration: 5",                // Iteration number
 		"TESTS MUST PASS",             // Critical rule
-		"ONE FEATURE",                 // Single feature rule
+		"SMART FEATURE SELECTION",     // Feature selection rule
 		"NEVER COMMIT",                // No commit without tests
 		"<promise>COMPLETE</promise>", // Completion signal
 	}

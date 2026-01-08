@@ -413,15 +413,20 @@ summary: [Brief summary of what was implemented]
 func (ic *IterationContext) buildDefaultTaskInstructions() string {
 	return `## Your Task
 
-1. Look at the PRD and find the highest priority feature where "passes" is false
-2. Implement that feature
-3. Run the tests using the testCommand from the PRD
-4. If tests pass:
+1. Look at the PRD and select the next feature using this logic:
+   - Skip features with passes: true (already done)
+   - Skip features blocked by unmet dependencies (check depends_on field)
+   - Pick the highest priority first (high > medium > low)
+   - Within same priority, pick first by ID order
+2. Report which feature you selected and WHY (e.g., "Selected feat-003: medium priority, feat-002 blocked by unmet dependency on feat-001")
+3. Implement that feature
+4. Run the tests using the testCommand from the PRD
+5. If tests pass:
    - Update prd.json to set "passes": true for the completed feature
    - Make a git commit with a descriptive message
    - Append a summary to progress.txt
-5. If tests fail, fix the issues and try again
-6. Continue until all features pass or you need to stop
+6. If tests fail, fix the issues and try again
+7. Continue until all features pass or you need to stop
 
 IMPORTANT RULES:
 - Tests MUST pass before any commit
