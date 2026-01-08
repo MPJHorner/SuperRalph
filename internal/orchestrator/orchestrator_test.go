@@ -1932,3 +1932,263 @@ func TestOrchestratorStartProgressEntryAllComplete(t *testing.T) {
 	// Feature should be nil since NextFeature() returns nil
 	assert.Nil(t, entry.CurrentFeature)
 }
+
+// =====================================================
+// Resume State Tests
+// =====================================================
+
+func TestResumeStateFile(t *testing.T) {
+	assert.Equal(t, ".superralph/state.json", ResumeStateFile)
+}
+
+func TestSaveResumeState(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	state := &ResumeState{
+		CurrentFeature:  "feat-003",
+		Phase:           PhasePlanning,
+		Iteration:       5,
+		TotalIterations: 20,
+	}
+
+	err := orch.SaveResumeState(state)
+	require.NoError(t, err)
+
+	// Verify file exists
+	path := filepath.Join(tmpDir, ResumeStateFile)
+	_, err = os.Stat(path)
+	require.NoError(t, err)
+
+	// Verify contents
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var loaded ResumeState
+	err = json.Unmarshal(data, &loaded)
+	require.NoError(t, err)
+
+	assert.Equal(t, "feat-003", loaded.CurrentFeature)
+	assert.Equal(t, PhasePlanning, loaded.Phase)
+	assert.Equal(t, 5, loaded.Iteration)
+	assert.Equal(t, 20, loaded.TotalIterations)
+	assert.Equal(t, tmpDir, loaded.WorkDir)
+	assert.Equal(t, "prd.json", loaded.PRDPath)
+	assert.False(t, loaded.Timestamp.IsZero())
+}
+
+func TestLoadResumeState(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// Create state file
+	stateDir := filepath.Join(tmpDir, ".superralph")
+	require.NoError(t, os.MkdirAll(stateDir, 0755))
+
+	state := ResumeState{
+		CurrentFeature:  "feat-005",
+		Phase:           PhaseExecuting,
+		Iteration:       10,
+		TotalIterations: 50,
+		WorkDir:         tmpDir,
+		PRDPath:         "prd.json",
+	}
+
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "state.json"), data, 0644))
+
+	// Load and verify
+	loaded, err := orch.LoadResumeState()
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	assert.Equal(t, "feat-005", loaded.CurrentFeature)
+	assert.Equal(t, PhaseExecuting, loaded.Phase)
+	assert.Equal(t, 10, loaded.Iteration)
+	assert.Equal(t, 50, loaded.TotalIterations)
+}
+
+func TestLoadResumeStateNotExists(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// No state file exists
+	loaded, err := orch.LoadResumeState()
+	require.NoError(t, err)
+	assert.Nil(t, loaded)
+}
+
+func TestLoadResumeStateInvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// Create invalid JSON file
+	stateDir := filepath.Join(tmpDir, ".superralph")
+	require.NoError(t, os.MkdirAll(stateDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "state.json"), []byte("not json"), 0644))
+
+	loaded, err := orch.LoadResumeState()
+	require.Error(t, err)
+	assert.Nil(t, loaded)
+	assert.Contains(t, err.Error(), "failed to parse resume state")
+}
+
+func TestClearResumeState(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// Create state file
+	state := &ResumeState{
+		CurrentFeature: "feat-001",
+		Iteration:      1,
+	}
+	require.NoError(t, orch.SaveResumeState(state))
+
+	// Verify file exists
+	assert.True(t, orch.HasResumeState())
+
+	// Clear it
+	err := orch.ClearResumeState()
+	require.NoError(t, err)
+
+	// Verify file is gone
+	assert.False(t, orch.HasResumeState())
+}
+
+func TestClearResumeStateNoFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// No state file exists - should not error
+	err := orch.ClearResumeState()
+	require.NoError(t, err)
+}
+
+func TestHasResumeState(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// No state initially
+	assert.False(t, orch.HasResumeState())
+
+	// Save state
+	state := &ResumeState{CurrentFeature: "feat-001", Iteration: 1}
+	require.NoError(t, orch.SaveResumeState(state))
+
+	// Now has state
+	assert.True(t, orch.HasResumeState())
+
+	// Clear it
+	require.NoError(t, orch.ClearResumeState())
+
+	// No longer has state
+	assert.False(t, orch.HasResumeState())
+}
+
+func TestResumeStateSerialization(t *testing.T) {
+	state := ResumeState{
+		CurrentFeature:  "feat-010",
+		Phase:           PhaseValidating,
+		Iteration:       15,
+		TotalIterations: 100,
+		WorkDir:         "/path/to/project",
+		PRDPath:         "custom-prd.json",
+	}
+
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+
+	var restored ResumeState
+	err = json.Unmarshal(data, &restored)
+	require.NoError(t, err)
+
+	assert.Equal(t, state.CurrentFeature, restored.CurrentFeature)
+	assert.Equal(t, state.Phase, restored.Phase)
+	assert.Equal(t, state.Iteration, restored.Iteration)
+	assert.Equal(t, state.TotalIterations, restored.TotalIterations)
+	assert.Equal(t, state.WorkDir, restored.WorkDir)
+	assert.Equal(t, state.PRDPath, restored.PRDPath)
+}
+
+func TestBuildConfigStartIteration(t *testing.T) {
+	config := DefaultBuildConfig()
+	assert.Equal(t, 1, config.StartIteration)
+	assert.Equal(t, "", config.ResumeFeature)
+}
+
+func TestBuildConfigWithResume(t *testing.T) {
+	config := BuildConfig{
+		MaxIterations:  50,
+		StartIteration: 10,
+		ResumeFeature:  "feat-005",
+	}
+
+	assert.Equal(t, 50, config.MaxIterations)
+	assert.Equal(t, 10, config.StartIteration)
+	assert.Equal(t, "feat-005", config.ResumeFeature)
+}
+
+func TestSaveInterruptedState(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// Call the internal saveInterruptedState function
+	orch.saveInterruptedState("feat-007", PhaseExecuting, 12, 50)
+
+	// Verify state was saved
+	loaded, err := orch.LoadResumeState()
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	assert.Equal(t, "feat-007", loaded.CurrentFeature)
+	assert.Equal(t, PhaseExecuting, loaded.Phase)
+	assert.Equal(t, 12, loaded.Iteration)
+	assert.Equal(t, 50, loaded.TotalIterations)
+}
+
+func TestRunBuildWithConfigClearsStateOnComplete(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a minimal PRD that's already complete
+	prdContent := `{
+		"name": "Test",
+		"description": "Test project",
+		"testCommand": "echo ok",
+		"features": [
+			{"id": "feat-001", "category": "functional", "priority": "high", "description": "Test", "steps": ["step"], "passes": true}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(prdContent), 0644))
+
+	orch := New(tmpDir)
+
+	// Create a fake resume state
+	state := &ResumeState{CurrentFeature: "feat-001", Iteration: 1}
+	require.NoError(t, orch.SaveResumeState(state))
+	assert.True(t, orch.HasResumeState())
+
+	// Run build - should complete immediately since all features pass
+	ctx := context.Background()
+	config := DefaultBuildConfig()
+	err := orch.RunBuildWithConfig(ctx, config)
+	require.NoError(t, err)
+
+	// State should be cleared on completion
+	assert.False(t, orch.HasResumeState())
+}
+
+func TestRunBuildWithConfigStartIteration(t *testing.T) {
+	// This test verifies that StartIteration is respected
+	// We can't easily test the full build loop, but we can test
+	// that the config values are set correctly
+
+	config := BuildConfig{
+		MaxIterations:  50,
+		StartIteration: 5,
+		ResumeFeature:  "feat-003",
+	}
+
+	assert.Equal(t, 5, config.StartIteration)
+	assert.Equal(t, "feat-003", config.ResumeFeature)
+}

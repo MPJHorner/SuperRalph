@@ -625,6 +625,34 @@ The orchestrator will restart you with fresh context for the next iteration.
 This "clean slate" approach ensures each iteration starts fresh without accumulated context.`
 }
 
+// ResumeState holds the state needed to resume a build after interruption.
+// This is saved to .superralph/state.json when the build is interrupted.
+type ResumeState struct {
+	// Timestamp when the state was saved
+	Timestamp time.Time `json:"timestamp"`
+
+	// CurrentFeature is the ID of the feature being worked on when interrupted
+	CurrentFeature string `json:"current_feature"`
+
+	// Phase is the phase that was active when interrupted
+	Phase Phase `json:"phase"`
+
+	// Iteration is the iteration number that was in progress
+	Iteration int `json:"iteration"`
+
+	// TotalIterations is the max iterations configured for the build
+	TotalIterations int `json:"total_iterations"`
+
+	// WorkDir is the working directory
+	WorkDir string `json:"work_dir"`
+
+	// PRDPath is the path to the PRD file (relative to WorkDir)
+	PRDPath string `json:"prd_path"`
+}
+
+// ResumeStateFile is the filename for the resume state file
+const ResumeStateFile = ".superralph/state.json"
+
 // ProgressEntryBuilder helps construct progress entries incrementally during an iteration.
 // It accumulates work done, test results, and commits throughout the iteration,
 // then produces a complete progress.Entry when the iteration completes.

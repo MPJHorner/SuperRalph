@@ -352,6 +352,71 @@ func (o *Orchestrator) LoadSession(id string) error {
 	return json.Unmarshal(data, &o.session)
 }
 
+// SaveResumeState saves the current build state for later resumption.
+// This is called during graceful shutdown to preserve progress.
+func (o *Orchestrator) SaveResumeState(state *ResumeState) error {
+	dir := filepath.Join(o.workDir, ".superralph")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create .superralph directory: %w", err)
+	}
+
+	state.Timestamp = time.Now().UTC()
+	state.WorkDir = o.workDir
+	if state.PRDPath == "" {
+		state.PRDPath = "prd.json"
+	}
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal resume state: %w", err)
+	}
+
+	path := filepath.Join(o.workDir, ResumeStateFile)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write resume state: %w", err)
+	}
+
+	return nil
+}
+
+// LoadResumeState loads the resume state from disk.
+// Returns nil if no resume state exists.
+func (o *Orchestrator) LoadResumeState() (*ResumeState, error) {
+	path := filepath.Join(o.workDir, ResumeStateFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No resume state - this is normal
+		}
+		return nil, fmt.Errorf("failed to read resume state: %w", err)
+	}
+
+	var state ResumeState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("failed to parse resume state: %w", err)
+	}
+
+	return &state, nil
+}
+
+// ClearResumeState removes the resume state file.
+// This is called on successful completion.
+func (o *Orchestrator) ClearResumeState() error {
+	path := filepath.Join(o.workDir, ResumeStateFile)
+	err := os.Remove(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove resume state: %w", err)
+	}
+	return nil
+}
+
+// HasResumeState checks if a resume state file exists.
+func (o *Orchestrator) HasResumeState() bool {
+	path := filepath.Join(o.workDir, ResumeStateFile)
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // SaveSession saves the session to disk
 func (o *Orchestrator) SaveSession() error {
 	dir := filepath.Join(o.workDir, ".superralph", "sessions")
@@ -426,6 +491,12 @@ type BuildConfig struct {
 
 	// DelayBetweenIterations is the delay between Claude invocations (default: 3s)
 	DelayBetweenIterations time.Duration
+
+	// StartIteration is the iteration to start from (default: 1, used for resume)
+	StartIteration int
+
+	// ResumeFeature is the feature ID to resume from (if resuming)
+	ResumeFeature string
 }
 
 // DefaultBuildConfig returns the default build configuration
@@ -433,6 +504,7 @@ func DefaultBuildConfig() BuildConfig {
 	return BuildConfig{
 		MaxIterations:          50,
 		DelayBetweenIterations: 3 * time.Second,
+		StartIteration:         1,
 	}
 }
 
@@ -451,12 +523,27 @@ func (o *Orchestrator) RunBuild(ctx context.Context) error {
 // 4. Run Claude once for a single feature
 // 5. Wait for Claude to complete
 // 6. Loop back to step 1
+//
+// Graceful shutdown: On context cancellation, the current action is completed before
+// saving state and exiting. Use --resume to continue from where you left off.
 func (o *Orchestrator) RunBuildWithConfig(ctx context.Context, config BuildConfig) error {
 	o.session.Mode = "build"
 
-	for iteration := 1; iteration <= config.MaxIterations; iteration++ {
+	// Determine starting iteration
+	startIteration := config.StartIteration
+	if startIteration < 1 {
+		startIteration = 1
+	}
+
+	// Track current state for potential resume
+	var currentFeatureID string
+	var currentPhase Phase
+
+	for iteration := startIteration; iteration <= config.MaxIterations; iteration++ {
 		// Check context cancellation at start of each iteration
 		if ctx.Err() != nil {
+			// Save state for resume
+			o.saveInterruptedState(currentFeatureID, currentPhase, iteration, config.MaxIterations)
 			return ctx.Err()
 		}
 
@@ -473,6 +560,8 @@ func (o *Orchestrator) RunBuildWithConfig(ctx context.Context, config BuildConfi
 		if currentPRD.IsComplete() {
 			o.typedOutput(OutputSuccess, "All features complete!")
 			o.activity("Complete")
+			// Clear resume state on successful completion
+			_ = o.ClearResumeState()
 			return nil
 		}
 
@@ -483,6 +572,10 @@ func (o *Orchestrator) RunBuildWithConfig(ctx context.Context, config BuildConfi
 			o.typedOutput(OutputError, "No available features to work on (all may be blocked)")
 			return fmt.Errorf("no available features: %s", reason)
 		}
+
+		// Update current feature for potential interrupt save
+		currentFeatureID = nextFeature.ID
+		currentPhase = "" // Default phase
 
 		stats := currentPRD.Stats()
 		o.typedOutput(OutputInfo, fmt.Sprintf("Progress: %d/%d features complete", stats.PassingFeatures, stats.TotalFeatures))
@@ -519,6 +612,8 @@ func (o *Orchestrator) RunBuildWithConfig(ctx context.Context, config BuildConfi
 		if err != nil {
 			// Check if it was a cancellation
 			if ctx.Err() != nil {
+				// Save state for resume - we're in the middle of this feature
+				o.saveInterruptedState(currentFeatureID, currentPhase, iteration, config.MaxIterations)
 				return ctx.Err()
 			}
 			// Log the error but continue to next iteration (Claude may have partially succeeded)
@@ -531,6 +626,8 @@ func (o *Orchestrator) RunBuildWithConfig(ctx context.Context, config BuildConfi
 			o.activity("Preparing next iteration...")
 			select {
 			case <-ctx.Done():
+				// Save state - we completed the iteration but were interrupted before next
+				o.saveInterruptedState(currentFeatureID, currentPhase, iteration+1, config.MaxIterations)
 				return ctx.Err()
 			case <-time.After(config.DelayBetweenIterations):
 				// Continue to next iteration
@@ -546,9 +643,28 @@ func (o *Orchestrator) RunBuildWithConfig(ctx context.Context, config BuildConfi
 	if err == nil {
 		stats := finalPRD.Stats()
 		o.typedOutput(OutputInfo, fmt.Sprintf("Final status: %d/%d features complete", stats.PassingFeatures, stats.TotalFeatures))
+		if finalPRD.IsComplete() {
+			// Clear resume state on successful completion
+			_ = o.ClearResumeState()
+		}
 	}
 
 	return nil
+}
+
+// saveInterruptedState saves the current state for later resumption
+func (o *Orchestrator) saveInterruptedState(featureID string, phase Phase, iteration, maxIterations int) {
+	state := &ResumeState{
+		CurrentFeature:  featureID,
+		Phase:           phase,
+		Iteration:       iteration,
+		TotalIterations: maxIterations,
+	}
+	if err := o.SaveResumeState(state); err != nil {
+		o.debugLog("Failed to save resume state: %v", err)
+	} else {
+		o.typedOutput(OutputInfo, fmt.Sprintf("Build state saved. Use --resume to continue from iteration %d.", iteration))
+	}
 }
 
 // RunFeatureLoop runs the three-phase loop (PLAN -> VALIDATE -> EXECUTE) for a single feature.

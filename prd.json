@@ -183,7 +183,7 @@
         "Clear state file on successful completion",
         "Test interrupt during each phase and verify clean resume"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-013",

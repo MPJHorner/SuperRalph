@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
@@ -20,7 +21,10 @@ import (
 	"github.com/mpjhorner/superralph/internal/tui/components"
 )
 
-var buildDebug bool
+var (
+	buildDebug  bool
+	buildResume bool
+)
 
 var buildCmd = &cobra.Command{
 	Use:   "build",
@@ -36,12 +40,17 @@ The agent will:
   6. Commit changes
   7. Repeat until all features pass
 
-Tests MUST pass before any commit. This is non-negotiable.`,
+Tests MUST pass before any commit. This is non-negotiable.
+
+Graceful Shutdown:
+  Press Ctrl+C to gracefully stop the build. The current action will complete
+  before saving state. Use --resume to continue from where you left off.`,
 	Run: runBuild,
 }
 
 func init() {
 	buildCmd.Flags().BoolVar(&buildDebug, "debug", false, "Show Claude's thinking process")
+	buildCmd.Flags().BoolVar(&buildResume, "resume", false, "Resume from saved state after interruption")
 	rootCmd.AddCommand(buildCmd)
 }
 
@@ -92,36 +101,68 @@ func runBuild(cmd *cobra.Command, args []string) {
 		fmt.Println(successStyle.Render("ok") + " Initialized git repository")
 	}
 
-	// Prompt for confirmation
-	var iterationsStr string
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Maximum iterations?").
-				Description("Safety limit for agent loops (default: 50)").
-				Placeholder("50").
-				Value(&iterationsStr),
-		),
-	)
-
-	err = form.Run()
-	if err != nil {
-		fmt.Println("Canceled")
-		os.Exit(0)
-	}
-
-	maxIterations := 50
-	if iterationsStr != "" {
-		if n, err := strconv.Atoi(iterationsStr); err == nil && n > 0 {
-			maxIterations = n
-		}
-	}
-
 	// Get working directory
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Println(errorStyle.Render("x") + " Failed to get current directory")
 		os.Exit(1)
+	}
+
+	// Check for resume state
+	var startIteration = 1
+	var resumeFeature string
+	var maxIterations = 50
+
+	tempOrch := orchestrator.New(cwd)
+	resumeState, err := tempOrch.LoadResumeState()
+	if err != nil {
+		fmt.Println(errorStyle.Render("x") + " Failed to load resume state")
+		fmt.Println(dimStyle.Render("  " + err.Error()))
+		os.Exit(1)
+	}
+
+	if resumeState != nil {
+		if buildResume {
+			// Resume from saved state
+			fmt.Println(successStyle.Render("ok") + " Found saved state from " + resumeState.Timestamp.Format("2006-01-02 15:04:05"))
+			fmt.Printf("  Resuming from iteration %d (feature: %s)\n\n", resumeState.Iteration, resumeState.CurrentFeature)
+			startIteration = resumeState.Iteration
+			resumeFeature = resumeState.CurrentFeature
+			maxIterations = resumeState.TotalIterations
+		} else {
+			// State exists but --resume not specified
+			fmt.Println(dimStyle.Render("  Note: Previous build was interrupted. Use --resume to continue."))
+			fmt.Printf("  Saved state: iteration %d, feature %s\n\n", resumeState.Iteration, resumeState.CurrentFeature)
+		}
+	} else if buildResume {
+		// --resume specified but no state found
+		fmt.Println(dimStyle.Render("  No saved state found. Starting fresh build."))
+	}
+
+	// Prompt for iterations only if not resuming
+	if !buildResume || resumeState == nil {
+		var iterationsStr string
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Maximum iterations?").
+					Description("Safety limit for agent loops (default: 50)").
+					Placeholder("50").
+					Value(&iterationsStr),
+			),
+		)
+
+		err = form.Run()
+		if err != nil {
+			fmt.Println("Canceled")
+			os.Exit(0)
+		}
+
+		if iterationsStr != "" {
+			if n, err := strconv.Atoi(iterationsStr); err == nil && n > 0 {
+				maxIterations = n
+			}
+		}
 	}
 
 	// Create the TUI model
@@ -313,8 +354,16 @@ func runBuild(cmd *cobra.Command, args []string) {
 		// Set state to running
 		program.Send(tui.StateChangeMsg(tui.StateRunning))
 
-		// Run the build
-		err := orch.RunBuild(ctx)
+		// Build config with resume support
+		buildConfig := orchestrator.BuildConfig{
+			MaxIterations:          maxIterations,
+			DelayBetweenIterations: 3 * time.Second,
+			StartIteration:         startIteration,
+			ResumeFeature:          resumeFeature,
+		}
+
+		// Run the build with config
+		err := orch.RunBuildWithConfig(ctx, buildConfig)
 
 		if err != nil {
 			if ctx.Err() != nil {
