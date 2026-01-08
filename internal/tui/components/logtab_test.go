@@ -13,8 +13,9 @@ func TestNewLogTab(t *testing.T) {
 	require.NotNil(t, lt, "NewLogTab should return non-nil")
 	assert.Equal(t, 80, lt.Width)
 	assert.Equal(t, 24, lt.Height)
-	assert.True(t, lt.AutoScroll, "AutoScroll should be enabled by default")
+	assert.True(t, lt.IsAutoScrollEnabled(), "AutoScroll should be enabled by default")
 	require.NotNil(t, lt.LogView, "LogView should be initialized")
+	require.NotNil(t, lt.SmartLog, "SmartLog should be initialized")
 }
 
 func TestLogTabAddLine(t *testing.T) {
@@ -77,13 +78,13 @@ func TestLogTabSetAutoScroll(t *testing.T) {
 func TestLogTabToggleAutoScroll(t *testing.T) {
 	lt := NewLogTab(80, 24)
 
-	assert.True(t, lt.AutoScroll)
+	assert.True(t, lt.IsAutoScrollEnabled())
 
 	lt.ToggleAutoScroll()
-	assert.False(t, lt.AutoScroll)
+	assert.False(t, lt.IsAutoScrollEnabled())
 
 	lt.ToggleAutoScroll()
-	assert.True(t, lt.AutoScroll)
+	assert.True(t, lt.IsAutoScrollEnabled())
 }
 
 func TestLogTabIsAutoScrollEnabled(t *testing.T) {
@@ -91,7 +92,7 @@ func TestLogTabIsAutoScrollEnabled(t *testing.T) {
 
 	assert.True(t, lt.IsAutoScrollEnabled())
 
-	lt.AutoScroll = false
+	lt.SetAutoScroll(false)
 	assert.False(t, lt.IsAutoScrollEnabled())
 }
 

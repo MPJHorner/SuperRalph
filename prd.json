@@ -228,7 +228,7 @@
         "Add mouse support: Wheel to scroll history, click to pause auto-scroll",
         "Test logs update correctly even when the Log tab is not currently active"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-016",

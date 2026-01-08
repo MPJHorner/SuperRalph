@@ -317,6 +317,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.ActiveTab == components.TabLogs {
 				m.LogTab.ToggleAutoScroll()
 			}
+		case "j", "down":
+			// Scroll down in log tab
+			if m.ActiveTab == components.TabLogs {
+				m.LogTab.ScrollDown(1)
+			} else if m.ActiveTab == components.TabFeatures {
+				var cmd tea.Cmd
+				m.InteractiveFeatureList, cmd = m.InteractiveFeatureList.Update(msg)
+				return m, cmd
+			}
+		case "k", "up":
+			// Scroll up in log tab
+			if m.ActiveTab == components.TabLogs {
+				m.LogTab.ScrollUp(1)
+			} else if m.ActiveTab == components.TabFeatures {
+				var cmd tea.Cmd
+				m.InteractiveFeatureList, cmd = m.InteractiveFeatureList.Update(msg)
+				return m, cmd
+			}
+		case "g":
+			// Go to top in log tab
+			if m.ActiveTab == components.TabLogs {
+				m.LogTab.GotoTop()
+			} else if m.ActiveTab == components.TabFeatures {
+				var cmd tea.Cmd
+				m.InteractiveFeatureList, cmd = m.InteractiveFeatureList.Update(msg)
+				return m, cmd
+			}
+		case "G":
+			// Go to bottom in log tab
+			if m.ActiveTab == components.TabLogs {
+				m.LogTab.GotoBottom()
+			} else if m.ActiveTab == components.TabFeatures {
+				var cmd tea.Cmd
+				m.InteractiveFeatureList, cmd = m.InteractiveFeatureList.Update(msg)
+				return m, cmd
+			}
+		case "pgup", "ctrl+u":
+			// Page up in log tab
+			if m.ActiveTab == components.TabLogs {
+				m.LogTab.ScrollUp(10)
+			}
+		case "pgdown", "ctrl+d":
+			// Page down in log tab
+			if m.ActiveTab == components.TabLogs {
+				m.LogTab.ScrollDown(10)
+			}
 		default:
 			// Pass other key messages to InteractiveFeatureList when on Features tab
 			if m.ActiveTab == components.TabFeatures {
@@ -324,6 +370,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.InteractiveFeatureList, cmd = m.InteractiveFeatureList.Update(msg)
 				return m, cmd
 			}
+			// Pass to LogTab for viewport handling when on Logs tab
+			if m.ActiveTab == components.TabLogs {
+				var cmd tea.Cmd
+				m.LogTab, cmd = m.LogTab.Update(msg)
+				return m, cmd
+			}
+		}
+
+	case tea.MouseMsg:
+		// Handle mouse events for log tab scrolling
+		if m.ActiveTab == components.TabLogs {
+			var cmd tea.Cmd
+			m.LogTab, cmd = m.LogTab.Update(msg)
+			return m, cmd
 		}
 
 	case tea.WindowSizeMsg:
@@ -754,6 +814,7 @@ func (m Model) renderHelp() string {
 	// Tab-specific help
 	switch m.ActiveTab {
 	case components.TabLogs:
+		keys = append(keys, "[j/k] Scroll", "[g/G] Top/Bottom")
 		if m.LogTab.IsAutoScrollEnabled() {
 			keys = append(keys, "[a] Auto-scroll ON")
 		} else {
