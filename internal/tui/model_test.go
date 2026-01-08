@@ -655,3 +655,261 @@ func TestRunStateToDashboardState(t *testing.T) {
 		assert.Equal(t, tt.expected, result, "runStateToDashboardState(%v)", tt.input)
 	}
 }
+
+// Responsive layout tests
+
+func TestLayoutBreakpointConstants(t *testing.T) {
+	assert.Equal(t, 60, MinWidth, "MinWidth should be 60")
+	assert.Equal(t, 100, CompactWidth, "CompactWidth should be 100")
+	assert.Equal(t, 140, WideWidth, "WideWidth should be 140")
+}
+
+func TestModelIsCompact(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Below CompactWidth should be compact
+	m.Width = 80
+	assert.True(t, m.IsCompact(), "Width 80 should be compact")
+
+	// At CompactWidth threshold should not be compact
+	m.Width = 100
+	assert.False(t, m.IsCompact(), "Width 100 should not be compact")
+
+	// Above CompactWidth should not be compact
+	m.Width = 120
+	assert.False(t, m.IsCompact(), "Width 120 should not be compact")
+}
+
+func TestModelIsWide(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Below WideWidth should not be wide
+	m.Width = 120
+	assert.False(t, m.IsWide(), "Width 120 should not be wide")
+
+	// At WideWidth threshold should be wide
+	m.Width = 140
+	assert.True(t, m.IsWide(), "Width 140 should be wide")
+
+	// Above WideWidth should be wide
+	m.Width = 180
+	assert.True(t, m.IsWide(), "Width 180 should be wide")
+}
+
+func TestGetProgressBarWidthResponsive(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Very small terminal
+	m.Width = 50
+	pbWidth := m.GetProgressBarWidth()
+	assert.Equal(t, 20, pbWidth, "Progress bar should be 20 for very small terminal")
+
+	// Compact terminal
+	m.Width = 80
+	pbWidth = m.GetProgressBarWidth()
+	assert.Equal(t, 25, pbWidth, "Progress bar should be 25 for compact terminal")
+
+	// Wide terminal
+	m.Width = 150
+	pbWidth = m.GetProgressBarWidth()
+	assert.Equal(t, 50, pbWidth, "Progress bar should be 50 for wide terminal")
+}
+
+func TestGetMiniProgressBarWidthResponsive(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Compact terminal
+	m.Width = 80
+	miniWidth := m.GetMiniProgressBarWidth()
+	assert.Equal(t, 6, miniWidth, "Mini progress bar should be 6 for compact terminal")
+
+	// Normal/wide terminal
+	m.Width = 120
+	miniWidth = m.GetMiniProgressBarWidth()
+	assert.Equal(t, 10, miniWidth, "Mini progress bar should be 10 for normal terminal")
+}
+
+func TestGetFeatureListWidthResponsive(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Very small terminal
+	m.Width = 50
+	flWidth := m.GetFeatureListWidth()
+	assert.Equal(t, 20, flWidth, "Feature list should be 20 for very small terminal")
+
+	// Compact terminal
+	m.Width = 80
+	flWidth = m.GetFeatureListWidth()
+	assert.Equal(t, 25, flWidth, "Feature list should be 25 for compact terminal")
+
+	// Normal terminal
+	m.Width = 120
+	flWidth = m.GetFeatureListWidth()
+	assert.Equal(t, 35, flWidth, "Feature list should be 35 for normal terminal")
+
+	// Wide terminal
+	m.Width = 150
+	flWidth = m.GetFeatureListWidth()
+	assert.Equal(t, 40, flWidth, "Feature list should be 40 for wide terminal")
+}
+
+func TestUpdateLayoutDimensions(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Simulate a window resize
+	m.Width = 120
+	m.Height = 40
+	m.updateLayoutDimensions()
+
+	// Check that components got resized
+	assert.Equal(t, 120, m.TabBar.Width, "TabBar width should match terminal width")
+	assert.True(t, m.LogView.Width > 0, "LogView width should be positive")
+	assert.True(t, m.ActionPanel.Width > 0, "ActionPanel width should be positive")
+	assert.True(t, m.FeatureList.Width > 0, "FeatureList width should be positive")
+	assert.True(t, m.Dashboard.Width > 0, "Dashboard width should be positive")
+}
+
+func TestUpdateLayoutDimensionsSmallHeight(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Simulate a small height terminal
+	m.Width = 100
+	m.Height = 20
+	m.updateLayoutDimensions()
+
+	// Check minimum heights are enforced
+	assert.GreaterOrEqual(t, m.LogView.Height, 5, "LogView height should be at least 5")
+	assert.Equal(t, 8, m.FeatureList.Height, "FeatureList height should be 8 for small terminals")
+}
+
+func TestWindowSizeMsgUpdatesLayout(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Initial dimensions
+	initialWidth := m.Width
+	initialHeight := m.Height
+
+	// Send a window size message
+	newModel, _ := m.Update(tea.WindowSizeMsg{Width: 150, Height: 50})
+	m2 := newModel.(Model)
+
+	// Check dimensions updated
+	assert.NotEqual(t, initialWidth, m2.Width, "Width should have changed")
+	assert.NotEqual(t, initialHeight, m2.Height, "Height should have changed")
+	assert.Equal(t, 150, m2.Width, "Width should be 150")
+	assert.Equal(t, 50, m2.Height, "Height should be 50")
+
+	// Check responsive values
+	assert.True(t, m2.IsWide(), "150 width should be wide")
+	assert.False(t, m2.IsCompact(), "150 width should not be compact")
+}
+
+func TestRenderProgressCompactHidesCategoryColumn(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Set compact width
+	m.Width = 80
+	assert.True(t, m.IsCompact(), "Should be in compact mode")
+
+	progress := m.renderProgress()
+
+	// In compact mode, should only show priority (not category)
+	assert.Contains(t, progress, "By Priority:", "Should show priority breakdown")
+	assert.NotContains(t, progress, "By Category:", "Should not show category in compact mode")
+}
+
+func TestRenderProgressWideShowsBothColumns(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Set wide width
+	m.Width = 150
+	assert.True(t, m.IsWide(), "Should be in wide mode")
+
+	progress := m.renderProgress()
+
+	// In wide mode, should show both columns
+	assert.Contains(t, progress, "By Priority:", "Should show priority breakdown")
+	assert.Contains(t, progress, "By Category:", "Should show category in wide mode")
+}
+
+func TestRenderDashboardTabResponsive(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Test at different widths
+	widths := []int{70, 100, 150}
+	for _, w := range widths {
+		m.Width = w
+		m.Height = 40
+		m.updateLayoutDimensions()
+
+		view := m.renderDashboardTab()
+		assert.NotEmpty(t, view, "Dashboard should render at width %d", w)
+		assert.Contains(t, view, "Progress", "Dashboard should contain Progress at width %d", w)
+	}
+}
+
+func TestResizeDuringExecution(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+	m.State = StateRunning
+
+	// Start with a normal width
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Resize to compact
+	newModel, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	m2 := newModel.(Model)
+
+	// Should still be running
+	assert.Equal(t, StateRunning, m2.State, "State should still be running after resize")
+
+	// Should be in compact mode
+	assert.True(t, m2.IsCompact(), "Should be in compact mode")
+
+	// View should still render
+	view := m2.View()
+	assert.NotEmpty(t, view, "View should render in compact mode")
+}
+
+func TestFeatureListResizesWithWindow(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Initial size
+	m.Width = 120
+	m.Height = 40
+	m.updateLayoutDimensions()
+	initialWidth := m.FeatureList.Width
+
+	// Resize to wide
+	m.Width = 160
+	m.updateLayoutDimensions()
+	wideWidth := m.FeatureList.Width
+
+	assert.Greater(t, wideWidth, initialWidth, "Feature list should be wider on wide terminal")
+}
+
+func TestViewportResizesWithWindow(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Resize window
+	m.Width = 150
+	m.Height = 50
+	m.updateLayoutDimensions()
+
+	// LogTab should have been resized
+	assert.True(t, m.LogTab.Width > 100, "LogTab should be wide")
+	assert.True(t, m.LogTab.Height > 30, "LogTab should be tall")
+}

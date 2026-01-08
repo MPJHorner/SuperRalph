@@ -256,7 +256,7 @@
         "Ensure the progress bar resizes to fit the available width",
         "Test resizing the terminal window during execution"
       ],
-      "passes": false
+      "passes": true
     }
   ]
 }

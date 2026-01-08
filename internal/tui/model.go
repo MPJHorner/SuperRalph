@@ -42,6 +42,16 @@ func (s RunState) String() string {
 	}
 }
 
+// Layout breakpoints for responsive design
+const (
+	// MinWidth is the minimum terminal width we support
+	MinWidth = 60
+	// CompactWidth is the threshold below which we use compact layout
+	CompactWidth = 100
+	// WideWidth is the threshold above which we use wide layout
+	WideWidth = 140
+)
+
 // Model is the main TUI model
 type Model struct {
 	// PRD data
@@ -93,6 +103,114 @@ type Model struct {
 	OnPause  func()
 	OnResume func()
 	OnDebug  func(enabled bool)
+}
+
+// IsCompact returns true if the terminal is in compact mode
+func (m Model) IsCompact() bool {
+	return m.Width < CompactWidth
+}
+
+// IsWide returns true if the terminal is in wide mode
+func (m Model) IsWide() bool {
+	return m.Width >= WideWidth
+}
+
+// GetProgressBarWidth returns the responsive width for the main progress bar
+func (m Model) GetProgressBarWidth() int {
+	if m.Width < MinWidth {
+		return 20
+	}
+	if m.IsCompact() {
+		return 25
+	}
+	if m.IsWide() {
+		return 50
+	}
+	// Default: scale between 30-45 based on width
+	return 30 + (m.Width-CompactWidth)/(WideWidth-CompactWidth)*15
+}
+
+// GetMiniProgressBarWidth returns the responsive width for mini progress bars
+func (m Model) GetMiniProgressBarWidth() int {
+	if m.IsCompact() {
+		return 6
+	}
+	return 10
+}
+
+// GetFeatureListWidth returns the responsive width for the feature list sidebar
+func (m Model) GetFeatureListWidth() int {
+	if m.Width < MinWidth {
+		return 20
+	}
+	if m.IsCompact() {
+		return 25
+	}
+	if m.IsWide() {
+		return 40
+	}
+	return 35
+}
+
+// updateLayoutDimensions recalculates all component dimensions based on terminal size
+func (m *Model) updateLayoutDimensions() {
+	// Calculate responsive feature list width
+	featureListWidth := m.GetFeatureListWidth()
+
+	// Main content column width (accounting for sidebar, gap, borders)
+	mainColWidth := m.Width - featureListWidth - 7
+	if mainColWidth < 40 {
+		mainColWidth = 40
+	}
+
+	// Log view dimensions (for dashboard compact log)
+	m.LogView.Width = m.Width - 4
+	logHeight := m.Height / 4
+	if logHeight < 5 {
+		logHeight = 5
+	}
+	m.LogView.Height = logHeight
+
+	// Action panel
+	m.ActionPanel.Width = mainColWidth
+	m.ActionPanel.Height = 8
+
+	// Phase and Step indicators
+	m.PhaseIndicator.Width = mainColWidth
+	m.StepIndicator.Width = mainColWidth
+
+	// Feature list sidebar (compact view on dashboard)
+	m.FeatureList.Width = featureListWidth
+	featureListHeight := 12
+	if m.Height < 30 {
+		featureListHeight = 8
+	}
+	m.FeatureList.Height = featureListHeight
+
+	// Tab bar
+	m.TabBar.Width = m.Width
+
+	// Log tab (full logs view)
+	logTabHeight := m.Height - 8
+	if logTabHeight < 10 {
+		logTabHeight = 10
+	}
+	m.LogTab.Resize(m.Width-4, logTabHeight)
+
+	// Dashboard
+	m.Dashboard.Width = mainColWidth
+	dashboardHeight := m.Height - 10
+	if dashboardHeight < 15 {
+		dashboardHeight = 15
+	}
+	m.Dashboard.Height = dashboardHeight
+
+	// Interactive feature list (full features view)
+	interactiveHeight := m.Height - 10
+	if interactiveHeight < 10 {
+		interactiveHeight = 10
+	}
+	m.InteractiveFeatureList.Resize(m.Width-4, interactiveHeight)
 }
 
 // NewModel creates a new TUI model
@@ -394,25 +512,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
-		// Calculate feature list width
-		featureListWidth := 35
-		if m.Width < 100 {
-			featureListWidth = 28
-		}
-		mainColWidth := m.Width - featureListWidth - 7 // Account for gap and borders
-		m.LogView.Width = msg.Width - 4
-		m.LogView.Height = m.Height / 4
-		m.ActionPanel.Width = mainColWidth
-		m.ActionPanel.Height = 8
-		m.PhaseIndicator.Width = mainColWidth
-		m.StepIndicator.Width = mainColWidth
-		m.FeatureList.Width = featureListWidth
-		m.FeatureList.Height = 12
-		m.TabBar.Width = msg.Width
-		m.LogTab.Resize(msg.Width-4, m.Height-8)
-		m.Dashboard.Width = mainColWidth
-		m.Dashboard.Height = m.Height - 10
-		m.InteractiveFeatureList.Resize(msg.Width-4, m.Height-10)
+		m.updateLayoutDimensions()
 
 	case TickMsg:
 		return m, tickCmd()
@@ -593,12 +693,12 @@ func (m Model) View() string {
 func (m Model) renderDashboardTab() string {
 	var b strings.Builder
 
-	// Calculate column widths
-	featureListWidth := 35
-	if m.Width < 100 {
-		featureListWidth = 28 // Narrower on small terminals
-	}
+	// Calculate responsive column widths
+	featureListWidth := m.GetFeatureListWidth()
 	mainColWidth := m.Width - featureListWidth - 3 // Account for gap
+	if mainColWidth < 40 {
+		mainColWidth = 40
+	}
 
 	// Build left column (main content)
 	var leftCol strings.Builder
@@ -631,7 +731,11 @@ func (m Model) renderDashboardTab() string {
 
 	// Build right column (feature list - compact view)
 	m.FeatureList.Width = featureListWidth
-	m.FeatureList.Height = 12
+	featureListHeight := 12
+	if m.Height < 30 {
+		featureListHeight = 8 // Shorter on small terminals
+	}
+	m.FeatureList.Height = featureListHeight
 	rightCol := m.FeatureList.Render()
 
 	// Join columns side by side
@@ -698,17 +802,31 @@ func (m Model) renderHeader() string {
 
 func (m Model) renderProgress() string {
 	stats := m.PRDStats
-	pb := components.NewProgressBar(stats.PassingFeatures, stats.TotalFeatures, 40)
+	// Use responsive progress bar width
+	pbWidth := m.GetProgressBarWidth()
+	pb := components.NewProgressBar(stats.PassingFeatures, stats.TotalFeatures, pbWidth)
 
 	var b strings.Builder
 	b.WriteString(BoldStyle.Render("Progress: "))
 	b.WriteString(pb.Render())
 	b.WriteString("\n\n")
 
-	// Category breakdown
-	b.WriteString(MutedStyle.Render("By Category:") + "                    ")
-	b.WriteString(MutedStyle.Render("By Priority:") + "\n")
+	// Get responsive mini progress bar width
+	miniWidth := m.GetMiniProgressBarWidth()
 
+	// On compact screens, show simplified breakdown (priority only)
+	if m.IsCompact() {
+		b.WriteString(MutedStyle.Render("By Priority:") + "\n")
+		priorities := prd.ValidPriorities()
+		for _, pri := range priorities {
+			ps := stats.ByPriority[pri]
+			mini := components.NewMiniProgressBar(ps.Passing, ps.Total, miniWidth)
+			b.WriteString(fmt.Sprintf("  %-8s %s %d/%d\n", pri, mini.Render(), ps.Passing, ps.Total))
+		}
+		return b.String()
+	}
+
+	// On wider screens, show both category and priority breakdown side by side
 	categories := prd.ValidCategories()
 	priorities := prd.ValidPriorities()
 	maxRows := len(categories)
@@ -716,24 +834,38 @@ func (m Model) renderProgress() string {
 		maxRows = len(priorities)
 	}
 
+	// Calculate column spacing based on width
+	catColWidth := 32
+	if m.IsWide() {
+		catColWidth = 38
+	}
+
+	b.WriteString(MutedStyle.Render("By Category:"))
+	b.WriteString(strings.Repeat(" ", catColWidth-12))
+	b.WriteString(MutedStyle.Render("By Priority:") + "\n")
+
 	for i := 0; i < maxRows; i++ {
 		// Category column
 		if i < len(categories) {
 			cat := categories[i]
 			cs := stats.ByCategory[cat]
-			mini := components.NewMiniProgressBar(cs.Passing, cs.Total, 10)
-			b.WriteString(fmt.Sprintf("  %-12s %s %d/%d", cat, mini.Render(), cs.Passing, cs.Total))
+			mini := components.NewMiniProgressBar(cs.Passing, cs.Total, miniWidth)
+			catLabel := fmt.Sprintf("  %-12s %s %d/%d", cat, mini.Render(), cs.Passing, cs.Total)
+			b.WriteString(catLabel)
+			// Pad to align columns
+			padding := catColWidth - len(cat) - miniWidth - 10
+			if padding > 0 {
+				b.WriteString(strings.Repeat(" ", padding))
+			}
 		} else {
-			b.WriteString(strings.Repeat(" ", 32))
+			b.WriteString(strings.Repeat(" ", catColWidth))
 		}
-
-		b.WriteString("    ")
 
 		// Priority column
 		if i < len(priorities) {
 			pri := priorities[i]
 			ps := stats.ByPriority[pri]
-			mini := components.NewMiniProgressBar(ps.Passing, ps.Total, 10)
+			mini := components.NewMiniProgressBar(ps.Passing, ps.Total, miniWidth)
 			b.WriteString(fmt.Sprintf("%-8s %s %d/%d", pri, mini.Render(), ps.Passing, ps.Total))
 		}
 		b.WriteString("\n")
