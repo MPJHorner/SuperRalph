@@ -238,6 +238,70 @@ type SnapshotConfig struct {
 	IncludeKeyFiles bool `json:"include_key_files,omitempty"`
 }
 
+// ToolConfig holds configuration for Claude's native tool permissions
+type ToolConfig struct {
+	// AllowRead permits the Read tool (default: true)
+	AllowRead bool `json:"allow_read,omitempty"`
+
+	// AllowWrite permits the Write tool (default: true, restricted to project dir)
+	AllowWrite bool `json:"allow_write,omitempty"`
+
+	// AllowEdit permits the Edit tool (default: true, restricted to project dir)
+	AllowEdit bool `json:"allow_edit,omitempty"`
+
+	// AllowedBashCommands is the list of allowed bash command prefixes
+	// Each entry allows commands starting with that prefix (e.g., "go" allows "go test", "go build")
+	// Default: ["go", "npm", "yarn", "pnpm", "cargo", "python", "pytest", "git", "make"]
+	AllowedBashCommands []string `json:"allowed_bash_commands,omitempty"`
+}
+
+// DefaultAllowedBashCommands is the default list of safe bash command prefixes
+var DefaultAllowedBashCommands = []string{
+	"go",     // Go toolchain (go build, go test, go run, etc.)
+	"npm",    // Node.js package manager
+	"yarn",   // Alternative Node.js package manager
+	"pnpm",   // Alternative Node.js package manager
+	"cargo",  // Rust package manager and build tool
+	"python", // Python interpreter
+	"pytest", // Python test framework
+	"git",    // Git version control
+	"make",   // Make build tool
+}
+
+// DefaultToolConfig returns the default tool configuration
+// This provides safe defaults that allow Claude to read, write, edit files
+// and run common development commands
+func DefaultToolConfig() ToolConfig {
+	return ToolConfig{
+		AllowRead:           true,
+		AllowWrite:          true,
+		AllowEdit:           true,
+		AllowedBashCommands: DefaultAllowedBashCommands,
+	}
+}
+
+// BuildAllowedToolsFlag builds the --allowedTools flag value from the config
+// Format: "Read,Write,Edit,Bash(go:*),Bash(npm:*),.."
+func (tc *ToolConfig) BuildAllowedToolsFlag() string {
+	var tools []string
+
+	if tc.AllowRead {
+		tools = append(tools, "Read")
+	}
+	if tc.AllowWrite {
+		tools = append(tools, "Write")
+	}
+	if tc.AllowEdit {
+		tools = append(tools, "Edit")
+	}
+
+	for _, cmd := range tc.AllowedBashCommands {
+		tools = append(tools, "Bash("+cmd+":*)")
+	}
+
+	return strings.Join(tools, ",")
+}
+
 // DefaultSnapshotConfig returns the default snapshot configuration
 func DefaultSnapshotConfig() SnapshotConfig {
 	return SnapshotConfig{

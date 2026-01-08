@@ -154,7 +154,7 @@
         "Parse tool usage from Claude's response to update TUI",
         "Test that tool permissions are enforced correctly"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-011",

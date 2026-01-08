@@ -1301,3 +1301,242 @@ func TestCmdMainGoPattern(t *testing.T) {
 	// Should detect cmd/myapp/main.go
 	assert.Contains(t, ctx.KeyFiles, "cmd/myapp/main.go")
 }
+
+// Tests for native Claude tools integration (feat-010)
+
+func TestDefaultToolConfig(t *testing.T) {
+	config := DefaultToolConfig()
+
+	assert.True(t, config.AllowRead)
+	assert.True(t, config.AllowWrite)
+	assert.True(t, config.AllowEdit)
+	assert.NotEmpty(t, config.AllowedBashCommands)
+
+	// Verify default bash commands
+	expectedCommands := []string{"go", "npm", "yarn", "pnpm", "cargo", "python", "pytest", "git", "make"}
+	assert.Equal(t, expectedCommands, config.AllowedBashCommands)
+}
+
+func TestDefaultAllowedBashCommandsConstant(t *testing.T) {
+	// Verify the constant contains expected commands
+	expectedCommands := []string{"go", "npm", "yarn", "pnpm", "cargo", "python", "pytest", "git", "make"}
+
+	assert.Equal(t, len(expectedCommands), len(DefaultAllowedBashCommands))
+	for i, expected := range expectedCommands {
+		assert.Equal(t, expected, DefaultAllowedBashCommands[i])
+	}
+}
+
+func TestOrchestratorDefaultToolConfig(t *testing.T) {
+	orch := New("/tmp/test")
+	config := orch.GetToolConfig()
+
+	assert.True(t, config.AllowRead)
+	assert.True(t, config.AllowWrite)
+	assert.True(t, config.AllowEdit)
+	assert.NotEmpty(t, config.AllowedBashCommands)
+}
+
+func TestSetToolConfig(t *testing.T) {
+	orch := New("/tmp/test")
+
+	config := ToolConfig{
+		AllowRead:           true,
+		AllowWrite:          false,
+		AllowEdit:           true,
+		AllowedBashCommands: []string{"go", "npm"},
+	}
+
+	result := orch.SetToolConfig(config)
+	assert.Equal(t, orch, result) // Test chaining
+
+	retrieved := orch.GetToolConfig()
+	assert.True(t, retrieved.AllowRead)
+	assert.False(t, retrieved.AllowWrite)
+	assert.True(t, retrieved.AllowEdit)
+	assert.Equal(t, []string{"go", "npm"}, retrieved.AllowedBashCommands)
+}
+
+func TestSetAllowedBashCommands(t *testing.T) {
+	orch := New("/tmp/test")
+
+	commands := []string{"go", "cargo", "make"}
+	result := orch.SetAllowedBashCommands(commands)
+	assert.Equal(t, orch, result) // Test chaining
+
+	config := orch.GetToolConfig()
+	assert.Equal(t, commands, config.AllowedBashCommands)
+}
+
+func TestAddAllowedBashCommand(t *testing.T) {
+	orch := New("/tmp/test")
+
+	// Start with default commands
+	originalLen := len(orch.GetToolConfig().AllowedBashCommands)
+
+	// Add a new command
+	result := orch.AddAllowedBashCommand("ruby")
+	assert.Equal(t, orch, result) // Test chaining
+
+	config := orch.GetToolConfig()
+	assert.Len(t, config.AllowedBashCommands, originalLen+1)
+	assert.Contains(t, config.AllowedBashCommands, "ruby")
+}
+
+func TestSetAllowRead(t *testing.T) {
+	orch := New("/tmp/test")
+
+	result := orch.SetAllowRead(false)
+	assert.Equal(t, orch, result) // Test chaining
+	assert.False(t, orch.GetToolConfig().AllowRead)
+
+	orch.SetAllowRead(true)
+	assert.True(t, orch.GetToolConfig().AllowRead)
+}
+
+func TestSetAllowWrite(t *testing.T) {
+	orch := New("/tmp/test")
+
+	result := orch.SetAllowWrite(false)
+	assert.Equal(t, orch, result) // Test chaining
+	assert.False(t, orch.GetToolConfig().AllowWrite)
+
+	orch.SetAllowWrite(true)
+	assert.True(t, orch.GetToolConfig().AllowWrite)
+}
+
+func TestSetAllowEdit(t *testing.T) {
+	orch := New("/tmp/test")
+
+	result := orch.SetAllowEdit(false)
+	assert.Equal(t, orch, result) // Test chaining
+	assert.False(t, orch.GetToolConfig().AllowEdit)
+
+	orch.SetAllowEdit(true)
+	assert.True(t, orch.GetToolConfig().AllowEdit)
+}
+
+func TestBuildAllowedToolsFlagDefault(t *testing.T) {
+	config := DefaultToolConfig()
+	flag := config.BuildAllowedToolsFlag()
+
+	// Should start with Read,Write,Edit
+	assert.True(t, strings.HasPrefix(flag, "Read,Write,Edit"))
+
+	// Should contain bash commands in format Bash(cmd:*)
+	assert.Contains(t, flag, "Bash(go:*)")
+	assert.Contains(t, flag, "Bash(npm:*)")
+	assert.Contains(t, flag, "Bash(yarn:*)")
+	assert.Contains(t, flag, "Bash(pnpm:*)")
+	assert.Contains(t, flag, "Bash(cargo:*)")
+	assert.Contains(t, flag, "Bash(python:*)")
+	assert.Contains(t, flag, "Bash(pytest:*)")
+	assert.Contains(t, flag, "Bash(git:*)")
+	assert.Contains(t, flag, "Bash(make:*)")
+}
+
+func TestBuildAllowedToolsFlagDisabledTools(t *testing.T) {
+	config := ToolConfig{
+		AllowRead:           false,
+		AllowWrite:          true,
+		AllowEdit:           false,
+		AllowedBashCommands: []string{"go"},
+	}
+	flag := config.BuildAllowedToolsFlag()
+
+	assert.NotContains(t, flag, "Read")
+	assert.Contains(t, flag, "Write")
+	assert.NotContains(t, flag, "Edit")
+	assert.Contains(t, flag, "Bash(go:*)")
+}
+
+func TestBuildAllowedToolsFlagNoBash(t *testing.T) {
+	config := ToolConfig{
+		AllowRead:           true,
+		AllowWrite:          true,
+		AllowEdit:           true,
+		AllowedBashCommands: []string{},
+	}
+	flag := config.BuildAllowedToolsFlag()
+
+	assert.Equal(t, "Read,Write,Edit", flag)
+}
+
+func TestBuildAllowedToolsFlagOnlyBash(t *testing.T) {
+	config := ToolConfig{
+		AllowRead:           false,
+		AllowWrite:          false,
+		AllowEdit:           false,
+		AllowedBashCommands: []string{"echo", "ls"},
+	}
+	flag := config.BuildAllowedToolsFlag()
+
+	assert.Equal(t, "Bash(echo:*),Bash(ls:*)", flag)
+}
+
+func TestToolConfigSerialization(t *testing.T) {
+	config := ToolConfig{
+		AllowRead:           true,
+		AllowWrite:          false,
+		AllowEdit:           true,
+		AllowedBashCommands: []string{"go", "npm", "git"},
+	}
+
+	data, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	var restored ToolConfig
+	err = json.Unmarshal(data, &restored)
+	require.NoError(t, err)
+
+	assert.True(t, restored.AllowRead)
+	assert.False(t, restored.AllowWrite)
+	assert.True(t, restored.AllowEdit)
+	assert.Equal(t, []string{"go", "npm", "git"}, restored.AllowedBashCommands)
+}
+
+func TestToolConfigEmptyAllowedCommands(t *testing.T) {
+	config := ToolConfig{
+		AllowRead:           true,
+		AllowWrite:          true,
+		AllowEdit:           true,
+		AllowedBashCommands: nil,
+	}
+
+	flag := config.BuildAllowedToolsFlag()
+	assert.Equal(t, "Read,Write,Edit", flag)
+}
+
+func TestOrchestratorToolConfigChaining(t *testing.T) {
+	orch := New("/tmp/test")
+
+	// Test method chaining
+	result := orch.
+		SetAllowRead(false).
+		SetAllowWrite(true).
+		SetAllowEdit(false).
+		SetAllowedBashCommands([]string{"go", "npm"}).
+		AddAllowedBashCommand("cargo")
+
+	assert.Equal(t, orch, result)
+
+	config := orch.GetToolConfig()
+	assert.False(t, config.AllowRead)
+	assert.True(t, config.AllowWrite)
+	assert.False(t, config.AllowEdit)
+	assert.Equal(t, []string{"go", "npm", "cargo"}, config.AllowedBashCommands)
+}
+
+func TestToolConfigBuildFlagOrder(t *testing.T) {
+	config := ToolConfig{
+		AllowRead:           true,
+		AllowWrite:          true,
+		AllowEdit:           true,
+		AllowedBashCommands: []string{"go", "npm"},
+	}
+	flag := config.BuildAllowedToolsFlag()
+
+	// Verify the order is Read, Write, Edit, then Bash commands
+	expected := "Read,Write,Edit,Bash(go:*),Bash(npm:*)"
+	assert.Equal(t, expected, flag)
+}
