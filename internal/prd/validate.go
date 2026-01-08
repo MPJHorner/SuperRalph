@@ -3,6 +3,8 @@ package prd
 import (
 	"fmt"
 	"strings"
+
+	"github.com/samber/lo"
 )
 
 // ValidationError represents a validation error with context
@@ -113,19 +115,15 @@ func (r *ValidationResult) addError(field, message string) {
 }
 
 func validCategoryList() string {
-	cats := ValidCategories()
-	strs := make([]string, len(cats))
-	for i, c := range cats {
-		strs[i] = string(c)
-	}
+	strs := lo.Map(ValidCategories(), func(c Category, _ int) string {
+		return string(c)
+	})
 	return strings.Join(strs, ", ")
 }
 
 func validPriorityList() string {
-	pris := ValidPriorities()
-	strs := make([]string, len(pris))
-	for i, p := range pris {
-		strs[i] = string(p)
-	}
+	strs := lo.Map(ValidPriorities(), func(p Priority, _ int) string {
+		return string(p)
+	})
 	return strings.Join(strs, ", ")
 }

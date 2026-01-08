@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/samber/lo"
 )
 
 // FileTag represents a file tag with its resolved paths and contents
@@ -205,23 +206,14 @@ func (t *Tagger) isExcluded(path string) bool {
 	}
 
 	parts := strings.Split(relPath, string(filepath.Separator))
-	for _, part := range parts {
-		if t.isExcludedDir(part) {
-			return true
-		}
-	}
-
-	return false
+	return lo.SomeBy(parts, func(part string) bool {
+		return t.isExcludedDir(part)
+	})
 }
 
 // isExcludedDir checks if a directory name should be excluded
 func (t *Tagger) isExcludedDir(name string) bool {
-	for _, excluded := range t.excludeDirs {
-		if name == excluded {
-			return true
-		}
-	}
-	return false
+	return lo.Contains(t.excludeDirs, name)
 }
 
 // LoadContents loads the contents of all resolved paths into the FileTag
@@ -304,13 +296,12 @@ func (t *Tagger) BuildTaggedFilesMap(tags []*FileTag) (map[string]string, error)
 
 // isExcludedByPatterns checks if a path matches any exclusion pattern
 func (t *Tagger) isExcludedByPatterns(path string, exclusions []string) bool {
-	for _, excl := range exclusions {
-		// Check if path starts with or contains the exclusion pattern
-		if strings.HasPrefix(path, excl) || strings.Contains(path, string(filepath.Separator)+excl+string(filepath.Separator)) || strings.HasSuffix(path, string(filepath.Separator)+excl) {
-			return true
-		}
-	}
-	return false
+	sep := string(filepath.Separator)
+	return lo.SomeBy(exclusions, func(excl string) bool {
+		return strings.HasPrefix(path, excl) ||
+			strings.Contains(path, sep+excl+sep) ||
+			strings.HasSuffix(path, sep+excl)
+	})
 }
 
 // ListFiles returns a list of files in the working directory for autocomplete
@@ -367,15 +358,11 @@ func (t *Tagger) ListFiles(maxDepth int) ([]string, error) {
 // ParseTagString parses a string containing multiple tags separated by spaces or newlines
 // Tags are identified by the @ prefix
 func ParseTagString(input string) []string {
-	var tags []string
-
-	// Split by whitespace
-	parts := strings.Fields(input)
-	for _, part := range parts {
-		if strings.HasPrefix(part, "@") {
-			tags = append(tags, part)
-		}
+	tags := lo.Filter(strings.Fields(input), func(part string, _ int) bool {
+		return strings.HasPrefix(part, "@")
+	})
+	if len(tags) == 0 {
+		return nil
 	}
-
 	return tags
 }

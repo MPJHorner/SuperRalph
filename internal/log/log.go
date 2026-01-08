@@ -1,5 +1,20 @@
 // Package log provides a structured logging wrapper around charmbracelet/log.
 // It provides a consistent logging interface throughout the SuperRalph codebase.
+//
+// This package is intended for diagnostic/operational logging, NOT for user-facing
+// CLI output. User-facing output should continue to use fmt.Print with lipgloss
+// styling for the best user experience.
+//
+// Use this package for:
+//   - Debug statements (when --debug is enabled)
+//   - Error logging to stderr
+//   - Internal diagnostic messages
+//   - Structured logging with context
+//
+// Do NOT use for:
+//   - Styled CLI output (use lipgloss + fmt)
+//   - Progress indicators
+//   - Interactive prompts
 package log
 
 import (

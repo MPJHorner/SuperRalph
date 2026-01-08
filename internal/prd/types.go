@@ -3,6 +3,8 @@ package prd
 import (
 	"fmt"
 	"strings"
+
+	"github.com/samber/lo"
 )
 
 // PRD represents a Product Requirements Document
@@ -48,12 +50,7 @@ func ValidCategories() []Category {
 
 // IsValid checks if the category is valid
 func (c Category) IsValid() bool {
-	for _, valid := range ValidCategories() {
-		if c == valid {
-			return true
-		}
-	}
-	return false
+	return lo.Contains(ValidCategories(), c)
 }
 
 // Priority represents the priority level of a feature
@@ -76,22 +73,19 @@ func ValidPriorities() []Priority {
 
 // IsValid checks if the priority is valid
 func (p Priority) IsValid() bool {
-	for _, valid := range ValidPriorities() {
-		if p == valid {
-			return true
-		}
-	}
-	return false
+	return lo.Contains(ValidPriorities(), p)
 }
 
 // Stats returns statistics about the PRD
 func (p *PRD) Stats() PRDStats {
 	stats := PRDStats{
-		TotalFeatures: len(p.Features),
-		ByCategory:    make(map[Category]CategoryStats),
-		ByPriority:    make(map[Priority]PriorityStats),
+		TotalFeatures:   len(p.Features),
+		PassingFeatures: lo.CountBy(p.Features, func(f Feature) bool { return f.Passes }),
+		ByCategory:      make(map[Category]CategoryStats),
+		ByPriority:      make(map[Priority]PriorityStats),
 	}
 
+	// Initialize all categories and priorities
 	for _, cat := range ValidCategories() {
 		stats.ByCategory[cat] = CategoryStats{}
 	}
@@ -99,12 +93,8 @@ func (p *PRD) Stats() PRDStats {
 		stats.ByPriority[pri] = PriorityStats{}
 	}
 
+	// Count by category and priority
 	for _, f := range p.Features {
-		if f.Passes {
-			stats.PassingFeatures++
-		}
-
-		// Update category stats
 		cs := stats.ByCategory[f.Category]
 		cs.Total++
 		if f.Passes {
@@ -112,7 +102,6 @@ func (p *PRD) Stats() PRDStats {
 		}
 		stats.ByCategory[f.Category] = cs
 
-		// Update priority stats
 		ps := stats.ByPriority[f.Priority]
 		ps.Total++
 		if f.Passes {
@@ -206,28 +195,25 @@ func (p *PRD) getBlockedHigherPriorityFeatures(selectedPriority Priority) []stri
 	}
 	selectedOrder := priorityOrder[selectedPriority]
 
-	var blocked []string
-	for i := range p.Features {
-		f := &p.Features[i]
+	blocked := lo.FilterMap(p.Features, func(f Feature, _ int) (string, bool) {
 		fOrder := priorityOrder[f.Priority]
 		// Only consider features with higher priority (lower order number)
-		if !f.Passes && fOrder < selectedOrder && !p.DependenciesMet(f) {
-			blocked = append(blocked, f.ID)
+		if !f.Passes && fOrder < selectedOrder && !p.DependenciesMet(&f) {
+			return f.ID, true
 		}
-	}
+		return "", false
+	})
 	return blocked
 }
 
 // getSkippedForDependencies returns IDs of features at the given priority that are skipped due to unmet dependencies
 func (p *PRD) getSkippedForDependencies(priority Priority) []string {
-	var skipped []string
-	for i := range p.Features {
-		f := &p.Features[i]
-		if !f.Passes && f.Priority == priority && !p.DependenciesMet(f) {
-			skipped = append(skipped, f.ID)
+	return lo.FilterMap(p.Features, func(f Feature, _ int) (string, bool) {
+		if !f.Passes && f.Priority == priority && !p.DependenciesMet(&f) {
+			return f.ID, true
 		}
-	}
-	return skipped
+		return "", false
+	})
 }
 
 // DependenciesMet returns true if all dependencies of the feature have passes: true
@@ -237,34 +223,26 @@ func (p *PRD) DependenciesMet(f *Feature) bool {
 	}
 
 	passingIDs := p.getPassingFeatureIDs()
-	for _, depID := range f.DependsOn {
-		if !passingIDs[depID] {
-			return false
-		}
-	}
-	return true
+	return lo.EveryBy(f.DependsOn, func(depID string) bool {
+		return passingIDs[depID]
+	})
 }
 
 // getPassingFeatureIDs returns a set of feature IDs that have passes: true
 func (p *PRD) getPassingFeatureIDs() map[string]bool {
-	passing := make(map[string]bool)
-	for _, f := range p.Features {
-		if f.Passes {
-			passing[f.ID] = true
-		}
-	}
-	return passing
+	passingFeatures := lo.Filter(p.Features, func(f Feature, _ int) bool {
+		return f.Passes
+	})
+	return lo.SliceToMap(passingFeatures, func(f Feature) (string, bool) {
+		return f.ID, true
+	})
 }
 
 // GetBlockedFeatures returns features that are blocked by unmet dependencies
 func (p *PRD) GetBlockedFeatures() []Feature {
-	var blocked []Feature
-	for _, f := range p.Features {
-		if !f.Passes && !p.DependenciesMet(&f) {
-			blocked = append(blocked, f)
-		}
-	}
-	return blocked
+	return lo.Filter(p.Features, func(f Feature, _ int) bool {
+		return !f.Passes && !p.DependenciesMet(&f)
+	})
 }
 
 // GetUnmetDependencies returns the IDs of dependencies that are not yet passing for a feature
@@ -274,21 +252,14 @@ func (p *PRD) GetUnmetDependencies(f *Feature) []string {
 	}
 
 	passingIDs := p.getPassingFeatureIDs()
-	var unmet []string
-	for _, depID := range f.DependsOn {
-		if !passingIDs[depID] {
-			unmet = append(unmet, depID)
-		}
-	}
-	return unmet
+	return lo.Filter(f.DependsOn, func(depID string, _ int) bool {
+		return !passingIDs[depID]
+	})
 }
 
 // IsComplete returns true if all features pass
 func (p *PRD) IsComplete() bool {
-	for _, f := range p.Features {
-		if !f.Passes {
-			return false
-		}
-	}
-	return len(p.Features) > 0
+	return len(p.Features) > 0 && lo.EveryBy(p.Features, func(f Feature) bool {
+		return f.Passes
+	})
 }
