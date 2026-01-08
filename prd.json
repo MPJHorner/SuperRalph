@@ -198,7 +198,7 @@
         "Ensure background processes (Claude execution) continue regardless of active tab",
         "Test switching views while an action is running"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-014",

@@ -68,9 +68,15 @@ type Model struct {
 	// Current activity (what Claude is doing right now)
 	CurrentActivity string
 
+	// Tab navigation
+	TabBar    *components.TabBar
+	ActiveTab components.Tab
+
 	// UI components
 	Spinner        spinner.Model
 	LogView        *components.LogView
+	LogTab         *components.LogTab
+	Dashboard      *components.Dashboard
 	PhaseIndicator *components.PhaseIndicator
 	ActionPanel    *components.ActionPanel
 	FeatureList    *components.FeatureList
@@ -98,6 +104,18 @@ func NewModel(p *prd.PRD, prdPath string, maxIterations int) Model {
 	featureList := components.NewFeatureList(30, 15)
 	featureList.UpdateFromPRD(p, "")
 
+	// Initialize dashboard
+	dashboard := components.NewDashboard(80, 20)
+	dashboard.SetPRD(p, prdPath)
+	dashboard.MaxIterations = maxIterations
+	dashboard.MaxRetries = 3
+
+	// Initialize tab bar
+	tabBar := components.NewTabBar()
+
+	// Initialize log tab
+	logTab := components.NewLogTab(80, 15)
+
 	return Model{
 		PRD:            p,
 		PRDPath:        prdPath,
@@ -107,8 +125,12 @@ func NewModel(p *prd.PRD, prdPath string, maxIterations int) Model {
 		MaxRetries:     3,
 		CurrentPhase:   components.PhaseNone,
 		CurrentStep:    orchestrator.StepIdle,
+		TabBar:         tabBar,
+		ActiveTab:      components.TabDashboard,
 		Spinner:        s,
 		LogView:        components.NewLogView(80, 10),
+		LogTab:         logTab,
+		Dashboard:      dashboard,
 		PhaseIndicator: components.NewPhaseIndicator(),
 		ActionPanel:    components.NewActionPanel(80, 8),
 		FeatureList:    featureList,
@@ -195,6 +217,11 @@ type (
 	StepChangeMsg struct {
 		Step orchestrator.Step
 	}
+
+	// TabChangeMsg signals a tab change
+	TabChangeMsg struct {
+		Tab components.Tab
+	}
 )
 
 // Init initializes the model
@@ -240,6 +267,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.OnDebug != nil {
 				m.OnDebug(m.DebugMode)
 			}
+		case "1", "2", "3":
+			// Tab switching via number keys
+			tab := components.TabFromKey(msg.String())
+			if tab >= 0 {
+				m.ActiveTab = tab
+				m.TabBar.SetActiveTab(tab)
+			}
+		case "tab":
+			// Tab key switches to next tab
+			m.TabBar.NextTab()
+			m.ActiveTab = m.TabBar.GetActiveTab()
+		case "shift+tab":
+			// Shift+Tab switches to previous tab
+			m.TabBar.PrevTab()
+			m.ActiveTab = m.TabBar.GetActiveTab()
+		case "a":
+			// Toggle auto-scroll in log tab
+			if m.ActiveTab == components.TabLogs {
+				m.LogTab.ToggleAutoScroll()
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -259,6 +306,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.StepIndicator.Width = mainColWidth
 		m.FeatureList.Width = featureListWidth
 		m.FeatureList.Height = 12
+		m.TabBar.Width = msg.Width
+		m.LogTab.Resize(msg.Width-4, m.Height-8)
+		m.Dashboard.Width = mainColWidth
+		m.Dashboard.Height = m.Height - 10
 
 	case TickMsg:
 		return m, tickCmd()
@@ -270,18 +321,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case LogMsg:
 		m.LogView.AddLine(string(msg))
+		m.LogTab.AddLine(string(msg))
 
 	case TypedLogMsg:
 		m.LogView.AddEntry(msg.Type, msg.Content)
+		m.LogTab.AddEntry(msg.Type, msg.Content)
 
 	case ActivityMsg:
 		m.CurrentActivity = string(msg)
+		m.Dashboard.SetActivity(string(msg))
 
 	case StateChangeMsg:
 		m.State = RunState(msg)
 		if m.State == StateRunning && m.StartTime.IsZero() {
 			m.StartTime = time.Now()
 		}
+		// Sync with dashboard
+		m.Dashboard.SetState(runStateToDashboardState(m.State))
 
 	case IterationStartMsg:
 		m.CurrentIteration = msg.Iteration
@@ -294,6 +350,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.CurrentFeature != nil {
 			m.FeatureList.UpdateFromPRD(m.PRD, m.CurrentFeature.ID)
 		}
+		// Sync with dashboard
+		m.Dashboard.SetIteration(msg.Iteration, m.MaxIterations)
+		m.Dashboard.SetFeature(msg.Feature)
+		m.Dashboard.SetRetry(0, m.MaxRetries)
+		m.Dashboard.ClearActions()
+		m.Dashboard.SetStep(orchestrator.StepReading)
 
 	case IterationCompleteMsg:
 		if msg.Success {
@@ -301,6 +363,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.RetryCount++
 		}
+		m.Dashboard.SetRetry(m.RetryCount, m.MaxRetries)
 
 	case PRDUpdateMsg:
 		m.PRD = msg.PRD
@@ -311,27 +374,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			currentFeatureID = m.CurrentFeature.ID
 		}
 		m.FeatureList.UpdateFromPRD(m.PRD, currentFeatureID)
+		// Sync with dashboard
+		m.Dashboard.UpdateStats(msg.Stats)
 
 	case ErrorMsgType:
 		m.ErrorMsg = msg.Error
 		m.State = StateError
+		m.Dashboard.SetError(msg.Error)
+		m.Dashboard.SetState(components.DashboardStateError)
 
 	case PhaseChangeMsg:
 		m.CurrentPhase = msg.Phase
 		m.PhaseIndicator.SetPhase(msg.Phase)
+		m.Dashboard.SetPhase(msg.Phase)
 
 	case StepChangeMsg:
 		m.CurrentStep = msg.Step
 		m.StepIndicator.SetStep(msg.Step)
+		m.Dashboard.SetStep(msg.Step)
 
 	case ActionAddMsg:
 		m.ActionPanel.AddAction(msg.Action)
+		m.Dashboard.AddAction(msg.Action)
 
 	case ActionUpdateMsg:
 		m.ActionPanel.UpdateAction(msg.ID, msg.Status, msg.Output)
+		m.Dashboard.UpdateAction(msg.ID, msg.Status, msg.Output)
 
 	case ActionClearMsg:
 		m.ActionPanel.Clear()
+		m.Dashboard.ClearActions()
 
 	case DebugToggleMsg:
 		m.DebugMode = !m.DebugMode
@@ -342,15 +414,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case BuildCompleteMsg:
 		if msg.Success {
 			m.State = StateComplete
+			m.Dashboard.SetState(components.DashboardStateComplete)
 		} else {
 			m.State = StateError
+			m.Dashboard.SetState(components.DashboardStateError)
 			if msg.Error != nil {
 				m.ErrorMsg = msg.Error.Error()
+				m.Dashboard.SetError(msg.Error.Error())
 			}
 		}
+
+	case TabChangeMsg:
+		m.ActiveTab = msg.Tab
+		m.TabBar.SetActiveTab(msg.Tab)
 	}
 
 	return m, nil
+}
+
+// runStateToDashboardState converts RunState to DashboardState
+func runStateToDashboardState(state RunState) components.DashboardState {
+	switch state {
+	case StateRunning:
+		return components.DashboardStateRunning
+	case StatePaused:
+		return components.DashboardStatePaused
+	case StateComplete:
+		return components.DashboardStateComplete
+	case StateError:
+		return components.DashboardStateError
+	default:
+		return components.DashboardStateIdle
+	}
 }
 
 // View renders the UI
@@ -360,6 +455,32 @@ func (m Model) View() string {
 	// Header (full width)
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n")
+
+	// Tab bar
+	m.TabBar.Width = m.Width
+	b.WriteString(m.TabBar.Render())
+	b.WriteString("\n\n")
+
+	// Render content based on active tab
+	switch m.ActiveTab {
+	case components.TabDashboard:
+		b.WriteString(m.renderDashboardTab())
+	case components.TabFeatures:
+		b.WriteString(m.renderFeaturesTab())
+	case components.TabLogs:
+		b.WriteString(m.renderLogsTab())
+	}
+
+	// Help (always visible)
+	b.WriteString("\n")
+	b.WriteString(m.renderHelp())
+
+	return b.String()
+}
+
+// renderDashboardTab renders the dashboard view (default tab)
+func (m Model) renderDashboardTab() string {
+	var b strings.Builder
 
 	// Calculate column widths
 	featureListWidth := 35
@@ -397,7 +518,7 @@ func (m Model) View() string {
 		leftCol.WriteString("\n")
 	}
 
-	// Build right column (feature list)
+	// Build right column (feature list - compact view)
 	m.FeatureList.Width = featureListWidth
 	m.FeatureList.Height = 12
 	rightCol := m.FeatureList.Render()
@@ -432,14 +553,29 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	}
 
-	// Log section (full width)
+	// Log section (compact, full width)
 	b.WriteString(m.renderLog())
-	b.WriteString("\n")
-
-	// Help
-	b.WriteString(m.renderHelp())
 
 	return b.String()
+}
+
+// renderFeaturesTab renders the features list view
+func (m Model) renderFeaturesTab() string {
+	var b strings.Builder
+
+	// Full-width feature list
+	m.FeatureList.Width = m.Width - 4
+	m.FeatureList.Height = m.Height - 12
+
+	b.WriteString(m.FeatureList.Render())
+
+	return b.String()
+}
+
+// renderLogsTab renders the dedicated logs view
+func (m Model) renderLogsTab() string {
+	m.LogTab.Resize(m.Width-2, m.Height-10)
+	return m.LogTab.Render()
 }
 
 func (m Model) renderHeader() string {
@@ -577,6 +713,20 @@ func (m Model) renderActions() string {
 
 func (m Model) renderHelp() string {
 	var keys []string
+
+	// Tab navigation
+	keys = append(keys, "[1-3/Tab] Switch tabs")
+
+	// Tab-specific help
+	if m.ActiveTab == components.TabLogs {
+		if m.LogTab.IsAutoScrollEnabled() {
+			keys = append(keys, "[a] Auto-scroll ON")
+		} else {
+			keys = append(keys, "[a] Auto-scroll OFF")
+		}
+	}
+
+	// Global controls
 	keys = append(keys, "[q] Quit")
 	if m.State == StateRunning {
 		keys = append(keys, "[p] Pause")
@@ -596,6 +746,7 @@ func (m Model) renderHelp() string {
 // AddLog adds a log line (can be called from outside)
 func (m *Model) AddLog(line string) {
 	m.LogView.AddLine(line)
+	m.LogTab.AddLine(line)
 }
 
 // SetState sets the run state

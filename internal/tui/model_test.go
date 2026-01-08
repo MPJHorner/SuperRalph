@@ -409,3 +409,249 @@ func TestModelUpdateBuildCompleteNoError(t *testing.T) {
 	assert.Equal(t, StateError, m2.State, "State should be StateError on failure")
 	assert.Empty(t, m2.ErrorMsg, "ErrorMsg should be empty when no error provided")
 }
+
+// Tab navigation tests
+
+func TestModelHasTabBar(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	require.NotNil(t, m.TabBar, "TabBar should be initialized")
+	assert.Equal(t, components.TabDashboard, m.ActiveTab, "Default active tab should be Dashboard")
+}
+
+func TestModelHasLogTab(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	require.NotNil(t, m.LogTab, "LogTab should be initialized")
+}
+
+func TestModelHasDashboard(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	require.NotNil(t, m.Dashboard, "Dashboard should be initialized")
+	assert.Equal(t, "Test Project", m.Dashboard.PRDName, "Dashboard should have PRD name")
+}
+
+func TestModelUpdateTabViaNumberKey(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Press "2" to switch to Features tab
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	m2 := newModel.(Model)
+
+	assert.Equal(t, components.TabFeatures, m2.ActiveTab, "ActiveTab should be Features after pressing 2")
+	assert.Equal(t, components.TabFeatures, m2.TabBar.GetActiveTab(), "TabBar should also be updated")
+
+	// Press "3" to switch to Logs tab
+	newModel, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
+	m3 := newModel.(Model)
+
+	assert.Equal(t, components.TabLogs, m3.ActiveTab, "ActiveTab should be Logs after pressing 3")
+
+	// Press "1" to switch back to Dashboard tab
+	newModel, _ = m3.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	m4 := newModel.(Model)
+
+	assert.Equal(t, components.TabDashboard, m4.ActiveTab, "ActiveTab should be Dashboard after pressing 1")
+}
+
+func TestModelUpdateTabViaTabKey(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+	assert.Equal(t, components.TabDashboard, m.ActiveTab)
+
+	// Press Tab to go to next tab
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m2 := newModel.(Model)
+
+	assert.Equal(t, components.TabFeatures, m2.ActiveTab, "Tab key should move to next tab")
+}
+
+func TestModelUpdateTabViaShiftTab(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+	assert.Equal(t, components.TabDashboard, m.ActiveTab)
+
+	// Press Shift+Tab to go to previous tab (wraps around)
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m2 := newModel.(Model)
+
+	assert.Equal(t, components.TabLogs, m2.ActiveTab, "Shift+Tab should wrap to last tab")
+}
+
+func TestModelUpdateTabChangeMsg(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	newModel, _ := m.Update(TabChangeMsg{Tab: components.TabLogs})
+	m2 := newModel.(Model)
+
+	assert.Equal(t, components.TabLogs, m2.ActiveTab, "TabChangeMsg should update ActiveTab")
+	assert.Equal(t, components.TabLogs, m2.TabBar.GetActiveTab(), "TabBar should also be updated")
+}
+
+func TestModelAutoScrollToggleOnLogsTab(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// Switch to Logs tab
+	m.ActiveTab = components.TabLogs
+
+	// Toggle auto-scroll
+	assert.True(t, m.LogTab.IsAutoScrollEnabled())
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m2 := newModel.(Model)
+
+	assert.False(t, m2.LogTab.IsAutoScrollEnabled(), "Auto-scroll should be disabled after pressing 'a'")
+
+	// Toggle again
+	newModel, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m3 := newModel.(Model)
+
+	assert.True(t, m3.LogTab.IsAutoScrollEnabled(), "Auto-scroll should be enabled after pressing 'a' again")
+}
+
+func TestModelAutoScrollToggleNotOnOtherTabs(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	// On Dashboard tab
+	m.ActiveTab = components.TabDashboard
+	initialAutoScroll := m.LogTab.IsAutoScrollEnabled()
+
+	// Press 'a' should not affect auto-scroll on Dashboard tab
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m2 := newModel.(Model)
+
+	assert.Equal(t, initialAutoScroll, m2.LogTab.IsAutoScrollEnabled(), "Auto-scroll should not change on Dashboard tab")
+}
+
+func TestModelViewContainsTabBar(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	view := m.View()
+
+	// Should contain tab labels
+	assert.Contains(t, view, "Dashboard", "View should contain Dashboard tab")
+	assert.Contains(t, view, "Features", "View should contain Features tab")
+	assert.Contains(t, view, "Logs", "View should contain Logs tab")
+}
+
+func TestModelViewRendersDashboardTab(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+	m.ActiveTab = components.TabDashboard
+
+	view := m.View()
+
+	// Dashboard should show progress
+	assert.Contains(t, view, "Progress", "Dashboard view should contain Progress")
+	// Dashboard should show status
+	assert.Contains(t, view, "Status", "Dashboard view should contain Status")
+}
+
+func TestModelViewRendersLogsTab(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+	m.ActiveTab = components.TabLogs
+
+	view := m.View()
+
+	// Logs tab should show Claude Output
+	assert.Contains(t, view, "Claude Output", "Logs view should contain Claude Output")
+	// Logs tab should show auto-scroll status
+	assert.Contains(t, view, "Auto-Scroll", "Logs view should show auto-scroll status")
+}
+
+func TestModelViewRendersFeaturesTab(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+	m.ActiveTab = components.TabFeatures
+
+	view := m.View()
+
+	// Features tab should show feature list
+	assert.Contains(t, view, "Features", "Features view should contain Features")
+}
+
+func TestModelLogMsgUpdatesLogTab(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	m.Update(LogMsg("Test log entry"))
+
+	// Check LogView has the entry
+	lines := m.LogView.GetLastLines(1)
+	require.Len(t, lines, 1)
+	assert.Equal(t, "Test log entry", lines[0])
+
+	// Check LogTab also has the entry
+	ltLines := m.LogTab.GetLastLines(1)
+	require.Len(t, ltLines, 1)
+	assert.Equal(t, "Test log entry", ltLines[0])
+}
+
+func TestModelTypedLogMsgUpdatesLogTab(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	m.Update(TypedLogMsg{Type: components.LogTypeToolUse, Content: "Using Read tool"})
+
+	// Check both LogView and LogTab have the entry
+	assert.Equal(t, 1, len(m.LogView.Entries))
+	assert.Equal(t, 1, m.LogTab.GetEntryCount())
+}
+
+func TestModelWindowSizeUpdatesTabBar(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	newModel, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m2 := newModel.(Model)
+
+	assert.Equal(t, 120, m2.TabBar.Width, "TabBar width should be updated")
+}
+
+func TestModelHelpShowsTabNavigation(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+
+	view := m.View()
+
+	assert.Contains(t, view, "Switch tabs", "Help should mention tab switching")
+}
+
+func TestModelHelpShowsAutoScrollOnLogsTab(t *testing.T) {
+	p := createTestPRD()
+	m := NewModel(p, "prd.json", 10)
+	m.ActiveTab = components.TabLogs
+
+	view := m.View()
+
+	assert.Contains(t, view, "[a] Auto-scroll", "Help should show auto-scroll toggle on Logs tab")
+}
+
+func TestRunStateToDashboardState(t *testing.T) {
+	tests := []struct {
+		input    RunState
+		expected components.DashboardState
+	}{
+		{StateIdle, components.DashboardStateIdle},
+		{StateRunning, components.DashboardStateRunning},
+		{StatePaused, components.DashboardStatePaused},
+		{StateComplete, components.DashboardStateComplete},
+		{StateError, components.DashboardStateError},
+		{RunState(99), components.DashboardStateIdle}, // Unknown defaults to Idle
+	}
+
+	for _, tt := range tests {
+		result := runStateToDashboardState(tt.input)
+		assert.Equal(t, tt.expected, result, "runStateToDashboardState(%v)", tt.input)
+	}
+}
