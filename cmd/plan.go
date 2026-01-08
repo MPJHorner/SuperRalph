@@ -13,9 +13,11 @@ import (
 
 	"github.com/mpjhorner/superralph/internal/orchestrator"
 	"github.com/mpjhorner/superralph/internal/prd"
+	"github.com/mpjhorner/superralph/internal/tui"
 )
 
 var planDebug bool
+var planSkipTagging bool
 
 var planCmd = &cobra.Command{
 	Use:   "plan",
@@ -28,12 +30,16 @@ Claude will:
   3. Help you think through features
   4. Create a well-structured prd.json
 
+Before starting, you can tag files with @ syntax to include them in Claude's context.
+This helps Claude understand your codebase better.
+
 If a prd.json already exists, you'll be asked to confirm before replacing it.`,
 	Run: runPlan,
 }
 
 func init() {
 	planCmd.Flags().BoolVar(&planDebug, "debug", false, "Show Claude's thinking process")
+	planCmd.Flags().BoolVar(&planSkipTagging, "no-tags", false, "Skip file tagging step")
 	rootCmd.AddCommand(planCmd)
 }
 
@@ -76,12 +82,6 @@ func runPlan(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	fmt.Println()
-	fmt.Println(boldStyle.Render("Starting PRD Planning Session"))
-	fmt.Println(dimStyle.Render("Claude will ask questions and explore your codebase to create a PRD."))
-	fmt.Println(dimStyle.Render("Press Ctrl+C to cancel at any time."))
-	fmt.Println()
-
 	// Get working directory
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -89,16 +89,54 @@ func runPlan(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Create the orchestrator
-	orch := orchestrator.New(cwd).
-		SetDebug(planDebug).
-		OnMessage(func(role, content string) {
-			if role == "assistant" {
-				fmt.Println()
-				fmt.Println(claudeStyle.Render("Claude:"))
-				fmt.Println(content)
+	// Create the orchestrator (needed for file listing)
+	orch := orchestrator.New(cwd).SetDebug(planDebug)
+
+	// File tagging step (unless skipped)
+	var taggedFiles []string
+	if !planSkipTagging {
+		fmt.Println()
+		fmt.Println(boldStyle.Render("Tag Files for Context"))
+		fmt.Println(dimStyle.Render("Select files to include in Claude's context for better planning."))
+		fmt.Println(dimStyle.Render("Type @ to search files, press Enter when done, or Ctrl+C to skip."))
+		fmt.Println()
+
+		// Get file list for autocomplete
+		files, err := orch.ListFilesForAutocomplete(4)
+		if err != nil {
+			fmt.Println(warnStyle.Render("⚠") + " Could not list files: " + err.Error())
+		} else if len(files) > 0 {
+			// Run the file tagger TUI
+			tags, err := tui.RunFileTagger(files)
+			if err != nil {
+				fmt.Println(warnStyle.Render("⚠") + " File tagging error: " + err.Error())
+			} else if tags != nil {
+				taggedFiles = tags
+				if len(taggedFiles) > 0 {
+					fmt.Println()
+					fmt.Println(successStyle.Render("✓") + " Tagged " + fmt.Sprintf("%d", len(taggedFiles)) + " file(s)")
+					for _, tag := range taggedFiles {
+						fmt.Println(dimStyle.Render("  " + tag))
+					}
+				}
 			}
-		}).
+		}
+	}
+
+	fmt.Println()
+	fmt.Println(boldStyle.Render("Starting PRD Planning Session"))
+	fmt.Println(dimStyle.Render("Claude will ask questions and explore your codebase to create a PRD."))
+	fmt.Println(dimStyle.Render("Press Ctrl+C to cancel at any time."))
+	fmt.Println()
+
+	// Configure orchestrator callbacks
+	orch.OnMessage(func(role, content string) {
+		if role == "assistant" {
+			fmt.Println()
+			fmt.Println(claudeStyle.Render("Claude:"))
+			fmt.Println(content)
+		}
+	}).
 		OnThinking(func(thinking string) {
 			if planDebug {
 				fmt.Println()
@@ -123,6 +161,11 @@ func runPlan(cmd *cobra.Command, args []string) {
 			fmt.Println(userStyle.Render("You:"))
 			return orchestrator.DefaultPromptUser("")
 		})
+
+	// Set tagged files if any were selected
+	if len(taggedFiles) > 0 {
+		orch.SetInitialTags(taggedFiles)
+	}
 
 	// Set up signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

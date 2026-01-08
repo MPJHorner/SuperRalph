@@ -17,6 +17,20 @@ import (
 	"github.com/mpjhorner/superralph/internal/tagging"
 )
 
+// OutputType represents the type of output for styled/colored display in TUI
+type OutputType string
+
+const (
+	OutputText       OutputType = "text"        // Claude's explanatory text (white)
+	OutputToolUse    OutputType = "tool_use"    // Tool being invoked (cyan)
+	OutputToolInput  OutputType = "tool_input"  // Tool input/command (cyan, indented)
+	OutputToolResult OutputType = "tool_result" // Tool output (muted gray)
+	OutputPhase      OutputType = "phase"       // Phase changes (purple)
+	OutputSuccess    OutputType = "success"     // Success messages (green)
+	OutputError      OutputType = "error"       // Errors (red)
+	OutputInfo       OutputType = "info"        // Info/status (muted)
+)
+
 // Orchestrator manages the agent loop
 type Orchestrator struct {
 	workDir    string
@@ -26,14 +40,19 @@ type Orchestrator struct {
 	tagger     *tagging.Tagger
 	parallel   *ParallelExecutor
 
+	// Initial tags for planning context
+	initialTags []string
+
 	// Callbacks for UI integration
-	onMessage  func(role, content string)
-	onAction   func(action Action, params ActionParams)
-	onState    func(state any)
-	onThinking func(thinking string)
-	onDebug    func(msg string)
-	onOutput   func(line string)
-	promptUser func(question string) (string, error)
+	onMessage     func(role, content string)
+	onAction      func(action Action, params ActionParams)
+	onState       func(state any)
+	onThinking    func(thinking string)
+	onDebug       func(msg string)
+	onOutput      func(line string)
+	onTypedOutput func(outputType OutputType, content string)
+	onActivity    func(activity string) // Current activity summary (e.g., "Reading src/main.go")
+	promptUser    func(question string) (string, error)
 }
 
 // New creates a new Orchestrator
@@ -125,10 +144,33 @@ func (o *Orchestrator) OnOutput(fn func(line string)) *Orchestrator {
 	return o
 }
 
+// OnTypedOutput sets the callback for typed/colored output messages
+func (o *Orchestrator) OnTypedOutput(fn func(outputType OutputType, content string)) *Orchestrator {
+	o.onTypedOutput = fn
+	return o
+}
+
+// OnActivity sets the callback for current activity updates
+func (o *Orchestrator) OnActivity(fn func(activity string)) *Orchestrator {
+	o.onActivity = fn
+	return o
+}
+
 // SetPromptUser sets the function to prompt the user
 func (o *Orchestrator) SetPromptUser(fn func(question string) (string, error)) *Orchestrator {
 	o.promptUser = fn
 	return o
+}
+
+// SetInitialTags sets the initial file tags for planning context
+func (o *Orchestrator) SetInitialTags(tags []string) *Orchestrator {
+	o.initialTags = tags
+	return o
+}
+
+// GetInitialTags returns the initial file tags
+func (o *Orchestrator) GetInitialTags() []string {
+	return o.initialTags
 }
 
 // LoadSession loads a session from disk
@@ -160,9 +202,12 @@ func (o *Orchestrator) RunPlan(ctx context.Context) error {
 	o.session.Mode = "plan"
 	o.session.State = &PlanState{Phase: "gathering"}
 
-	prompt := `Help me create a prd.json file for this project. 
+	// Build prompt with optional tagged files context
+	var promptBuilder strings.Builder
 
-Ask me what I want to build, explore the existing codebase if there is one, 
+	promptBuilder.WriteString(`Help me create a prd.json file for this project.
+
+Ask me what I want to build, explore the existing codebase if there is one,
 and help me define features with clear verification steps.
 
 When done, create the prd.json file with this structure:
@@ -181,10 +226,28 @@ When done, create the prd.json file with this structure:
     }
   ]
 }
+`)
 
-Start by asking what I want to build.`
+	// Add tagged files context if any
+	if len(o.initialTags) > 0 {
+		promptBuilder.WriteString("\n\n## Tagged Files for Context\n\n")
+		promptBuilder.WriteString("The user has tagged the following files as important for planning:\n\n")
 
-	return o.runClaudeInteractive(ctx, prompt)
+		// Load tagged file contents
+		tags, err := o.tagger.ResolveTags(o.initialTags)
+		if err == nil {
+			filesMap, err := o.tagger.BuildTaggedFilesMap(tags)
+			if err == nil && len(filesMap) > 0 {
+				for path, content := range filesMap {
+					promptBuilder.WriteString(fmt.Sprintf("### %s\n\n```\n%s\n```\n\n", path, content))
+				}
+			}
+		}
+	}
+
+	promptBuilder.WriteString("\nStart by asking what I want to build.")
+
+	return o.runClaudeInteractive(ctx, promptBuilder.String())
 }
 
 // RunBuild runs the build loop using fresh context per iteration.
@@ -575,8 +638,8 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 	}
 
 	startTime := time.Now()
-	fmt.Println("  Claude is working...")
-	fmt.Println()
+	o.typedOutput(OutputInfo, "Claude is working...")
+	o.activity("Starting Claude...")
 
 	// Read stderr in background
 	var stderrBuf strings.Builder
@@ -598,7 +661,7 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 		var event map[string]any
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			// Not JSON, might be plain text - show it
-			fmt.Println(line)
+			o.output(line)
 			continue
 		}
 
@@ -621,18 +684,24 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 							switch blockType {
 							case "text":
 								if text, ok := blockMap["text"].(string); ok {
-									fmt.Println(text)
+									o.typedOutput(OutputText, text)
 								}
 							case "tool_use":
 								if name, ok := blockMap["name"].(string); ok {
-									fmt.Printf("\n  [Using tool: %s]\n", name)
+									o.typedOutput(OutputToolUse, fmt.Sprintf("Using tool: %s", name))
 									if input, ok := blockMap["input"].(map[string]any); ok {
-										// Show some context about the tool use
-										if cmd, ok := input["command"].(string); ok {
-											fmt.Printf("  > %s\n", cmd)
+										// Show some context about the tool use and update activity
+										if cmdStr, ok := input["command"].(string); ok {
+											o.typedOutput(OutputToolInput, "> "+cmdStr)
+											o.activity(fmt.Sprintf("Running: %s", truncateString(cmdStr, 50)))
 										}
 										if path, ok := input["file_path"].(string); ok {
-											fmt.Printf("  > %s\n", path)
+											o.typedOutput(OutputToolInput, "> "+path)
+											o.activity(fmt.Sprintf("%s: %s", name, path))
+										}
+										if filePath, ok := input["filePath"].(string); ok {
+											o.typedOutput(OutputToolInput, "> "+filePath)
+											o.activity(fmt.Sprintf("%s: %s", name, filePath))
 										}
 									}
 								}
@@ -650,16 +719,16 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 						if blockMap, ok := block.(map[string]any); ok {
 							if blockMap["type"] == "tool_result" {
 								// Show truncated tool result
-								if content, ok := blockMap["content"].(string); ok {
-									lines := strings.Split(content, "\n")
-									if len(lines) > 10 {
-										for _, line := range lines[:5] {
-											fmt.Printf("    %s\n", line)
+								if contentStr, ok := blockMap["content"].(string); ok {
+									lines := strings.Split(contentStr, "\n")
+									if len(lines) > 5 {
+										for _, l := range lines[:5] {
+											o.typedOutput(OutputToolResult, "  "+l)
 										}
-										fmt.Printf("    ... (%d more lines)\n", len(lines)-5)
+										o.typedOutput(OutputToolResult, fmt.Sprintf("  ... (%d more lines)", len(lines)-5))
 									} else {
-										for _, line := range lines {
-											fmt.Printf("    %s\n", line)
+										for _, l := range lines {
+											o.typedOutput(OutputToolResult, "  "+l)
 										}
 									}
 								}
@@ -675,19 +744,21 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 			subtype, _ := event["subtype"].(string)
 
 			if result, ok := event["result"].(string); ok && result != "" {
-				fmt.Printf("\n%s\n", result)
+				o.typedOutput(OutputText, result)
 			}
 
-			fmt.Printf("\n  [%s: %.1fs", subtype, elapsed)
+			// Build stats message
+			statsMsg := fmt.Sprintf("%s: %.1fs", subtype, elapsed)
 			if cost, ok := event["total_cost_usd"].(float64); ok {
-				fmt.Printf(", $%.4f", cost)
+				statsMsg += fmt.Sprintf(", $%.4f", cost)
 			}
-			fmt.Println("]")
+			o.typedOutput(OutputInfo, statsMsg)
 
 		case "error":
 			// Error occurred
 			if errData, ok := event["error"].(map[string]any); ok {
 				if msg, ok := errData["message"].(string); ok {
+					o.typedOutput(OutputError, "Claude error: "+msg)
 					return fmt.Errorf("claude error: %s", msg)
 				}
 			}
@@ -713,15 +784,49 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 	}
 
 	elapsed := time.Since(startTime).Seconds()
-	fmt.Printf("\n  [Complete: %.1fs]\n", elapsed)
+	o.typedOutput(OutputSuccess, fmt.Sprintf("Complete: %.1fs", elapsed))
+	o.activity("Complete")
 
 	return nil
+}
+
+// truncateString truncates a string to maxLen characters, adding "..." if truncated
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // debugLog logs a debug message
 func (o *Orchestrator) debugLog(format string, args ...any) {
 	if o.debug && o.onDebug != nil {
 		o.onDebug(fmt.Sprintf(format, args...))
+	}
+}
+
+// output sends a plain text message through the callback
+func (o *Orchestrator) output(content string) {
+	if o.onTypedOutput != nil {
+		o.onTypedOutput(OutputText, content)
+	} else if o.onOutput != nil {
+		o.onOutput(content)
+	}
+}
+
+// typedOutput sends a typed/colored message through the callback
+func (o *Orchestrator) typedOutput(outputType OutputType, content string) {
+	if o.onTypedOutput != nil {
+		o.onTypedOutput(outputType, content)
+	} else if o.onOutput != nil {
+		o.onOutput(content)
+	}
+}
+
+// activity updates the current activity display
+func (o *Orchestrator) activity(activity string) {
+	if o.onActivity != nil {
+		o.onActivity(activity)
 	}
 }
 

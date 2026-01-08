@@ -880,3 +880,37 @@ func TestActionParallelType(t *testing.T) {
 
 	assert.True(t, validActions[ActionParallel])
 }
+
+func TestSetInitialTags(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// Initially should be empty
+	assert.Empty(t, orch.GetInitialTags())
+
+	// Set some tags
+	tags := []string{"@main.go", "@cmd/", "@internal/**/*.go"}
+	orch.SetInitialTags(tags)
+
+	// Should return the same tags
+	assert.Equal(t, tags, orch.GetInitialTags())
+
+	// Should support chaining
+	newTags := []string{"@README.md"}
+	result := orch.SetInitialTags(newTags)
+	assert.Equal(t, orch, result)
+	assert.Equal(t, newTags, orch.GetInitialTags())
+}
+
+func TestSetInitialTagsEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := New(tmpDir)
+
+	// Set empty tags
+	orch.SetInitialTags([]string{})
+	assert.Empty(t, orch.GetInitialTags())
+
+	// Set nil tags
+	orch.SetInitialTags(nil)
+	assert.Nil(t, orch.GetInitialTags())
+}
