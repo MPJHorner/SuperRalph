@@ -88,13 +88,13 @@ func TestAutocompleteFilter(t *testing.T) {
 		expected int
 	}{
 		{"empty query shows all", "", 7},
-		{"filter by go", "go", 6},          // All .go files
-		{"filter by test", "test", 2},      // Files with "test"
-		{"filter by tui", "tui", 2},        // Files in tui directory
-		{"filter by model", "model", 2},    // model.go and model_test.go
-		{"filter by cmd", "cmd", 2},        // Files in cmd directory
-		{"filter by main", "main", 2},      // main.go and main_test.go
-		{"no match", "xyz123", 0},          // No matches
+		{"filter by go", "go", 6},       // All .go files
+		{"filter by test", "test", 2},   // Files with "test"
+		{"filter by tui", "tui", 2},     // Files in tui directory
+		{"filter by model", "model", 2}, // model.go and model_test.go
+		{"filter by cmd", "cmd", 2},     // Files in cmd directory
+		{"filter by main", "main", 2},   // main.go and main_test.go
+		{"no match", "xyz123", 0},       // No matches
 	}
 
 	for _, tt := range tests {

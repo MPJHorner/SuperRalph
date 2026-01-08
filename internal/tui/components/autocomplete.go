@@ -373,7 +373,7 @@ func (a *Autocomplete) Render() string {
 	if a.SelectedCount() > 0 {
 		title = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("42")).
-			Render(strings.Repeat("*", a.SelectedCount()) + " ") + title
+			Render(strings.Repeat("*", a.SelectedCount())+" ") + title
 	}
 	if a.Query != "" {
 		title += " matching '" + a.Query + "'"

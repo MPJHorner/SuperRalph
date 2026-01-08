@@ -73,6 +73,24 @@ superralph/
 
 ---
 
+## Pre-Commit Requirements
+
+**CRITICAL: Before committing any Go code changes, you MUST run:**
+
+```bash
+make lint
+```
+
+This runs `golangci-lint` which checks for formatting issues (`gofmt`), style violations, and other problems. The CI pipeline will fail if lint checks don't pass.
+
+If lint fails, fix the issues with:
+```bash
+make lint-fix  # Auto-fix what's possible
+make fmt       # Format all Go files
+```
+
+---
+
 ## Code Style Guide
 
 ### Go Conventions
