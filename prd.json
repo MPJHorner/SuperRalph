@@ -184,6 +184,79 @@
         "Test interrupt during each phase and verify clean resume"
       ],
       "passes": false
+    },
+    {
+      "id": "feat-013",
+      "category": "ui",
+      "priority": "high",
+      "description": "Tabbed Application Layout - restructure TUI into distinct views (Dashboard, Features, Logs) to reduce clutter",
+      "steps": [
+        "Implement a top-level model that holds state for active tab index",
+        "Create distinct models for: DashboardModel, FeatureListModel, LogModel",
+        "Render a navigation bar at the top (e.g., [1] Dashboard  [2] Features  [3] Logs)",
+        "Handle KeyMsg to switch tabs (Tab/Shift+Tab or numbers 1-3)",
+        "Ensure background processes (Claude execution) continue regardless of active tab",
+        "Test switching views while an action is running"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-014",
+      "category": "ui",
+      "priority": "high",
+      "description": "Interactive Scrollable Feature List - specific tab for managing features with grouping and status filtering",
+      "steps": [
+        "Use 'bubbles/list' component to create a scrollable list of PRD features",
+        "Implement custom delegates to render features with status icons (Checkmark, Spinner, Dot)",
+        "Group features visually: 'In Progress' (top), 'Pending' (middle), 'Done' (bottom, dimmed)",
+        "Add detail view: Pressing 'Enter' on a feature slides out a pane showing its full description/steps",
+        "Add filtering: Press '/' to fuzzy search features by ID or description",
+        "Test scrolling behavior with mouse wheel and keyboard navigation (j/k)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-015",
+      "category": "ui",
+      "priority": "high",
+      "description": "Smart Log Viewport - scrollable, buffered log history with syntax highlighting and auto-scroll",
+      "steps": [
+        "Replace static log string with 'bubbles/viewport' component for high-performance text rendering",
+        "Implement a ring buffer (limit 1000 lines) to prevent memory bloat",
+        "Add 'Auto-Scroll' toggle: Lock to bottom when new logs arrive, unlock when user scrolls up",
+        "Integrate 'charmbracelet/glamour' or 'chroma' to syntax highlight JSON and Code blocks in the log",
+        "Add mouse support: Wheel to scroll history, click to pause auto-scroll",
+        "Test logs update correctly even when the Log tab is not currently active"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-016",
+      "category": "ui",
+      "priority": "medium",
+      "description": "Visual Diff Viewer - show nice diffs when Claude modifies files",
+      "steps": [
+        "Capture file content before and after 'Write' tool usage",
+        "Generate a unified diff string",
+        "Render the diff in the Log Viewport using green (+) and red (-) styling",
+        "Wrap the diff in a collapsible block or separate UI element so it doesn't flood the main log",
+        "Test with a multi-line code change"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feat-017",
+      "category": "ui",
+      "priority": "medium",
+      "description": "Responsive Layout Grid - Ensure UI adapts gracefully to different terminal window sizes",
+      "steps": [
+        "Implement 'WindowSizeMsg' handler in the main update loop",
+        "Dynamically calculate width/height for the Viewport and List components based on terminal size",
+        "Hide non-essential columns (like granular timestamps) on smaller screens",
+        "Ensure the progress bar resizes to fit the available width",
+        "Test resizing the terminal window during execution"
+      ],
+      "passes": false
     }
   ]
 }
