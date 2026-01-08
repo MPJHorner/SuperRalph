@@ -145,6 +145,10 @@ type IterationContext struct {
 	// DirectoryTree is the codebase structure
 	DirectoryTree string `json:"directory_tree,omitempty"`
 
+	// KeyFiles maps file paths to their contents for automatically detected key files
+	// (e.g., go.mod, package.json, Cargo.toml, README.md, main entry points)
+	KeyFiles map[string]string `json:"key_files,omitempty"`
+
 	// CurrentFeature is the feature being worked on (if any)
 	CurrentFeature *FeatureContext `json:"current_feature,omitempty"`
 
@@ -162,6 +166,27 @@ type IterationContext struct {
 
 	// ValidationAttempt tracks which validation attempt this is (1-3)
 	ValidationAttempt int `json:"validation_attempt,omitempty"`
+}
+
+// SnapshotConfig holds configuration for codebase snapshots
+type SnapshotConfig struct {
+	// MaxTreeDepth is the maximum depth for directory tree (default: 4)
+	MaxTreeDepth int `json:"max_tree_depth,omitempty"`
+
+	// MaxFileSizeBytes is the maximum file size to include in key files (default: 50KB)
+	MaxFileSizeBytes int64 `json:"max_file_size_bytes,omitempty"`
+
+	// IncludeKeyFiles enables automatic inclusion of key files (default: true)
+	IncludeKeyFiles bool `json:"include_key_files,omitempty"`
+}
+
+// DefaultSnapshotConfig returns the default snapshot configuration
+func DefaultSnapshotConfig() SnapshotConfig {
+	return SnapshotConfig{
+		MaxTreeDepth:     4,
+		MaxFileSizeBytes: 50 * 1024, // 50KB
+		IncludeKeyFiles:  true,
+	}
 }
 
 // FeatureContext holds information about the feature being worked on
@@ -198,6 +223,15 @@ func (ic *IterationContext) BuildPrompt() string {
 		sb.WriteString("## Directory Structure\n```\n")
 		sb.WriteString(ic.DirectoryTree)
 		sb.WriteString("\n```\n\n")
+	}
+
+	// Key files if any (automatically detected project files)
+	if len(ic.KeyFiles) > 0 {
+		sb.WriteString("## Key Files\n")
+		sb.WriteString("These are automatically detected important project files:\n\n")
+		for path, content := range ic.KeyFiles {
+			sb.WriteString(fmt.Sprintf("### %s\n```\n%s\n```\n\n", path, content))
+		}
 	}
 
 	// Tagged files if any

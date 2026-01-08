@@ -33,12 +33,13 @@ const (
 
 // Orchestrator manages the agent loop
 type Orchestrator struct {
-	workDir    string
-	claudePath string
-	session    *Session
-	debug      bool
-	tagger     *tagging.Tagger
-	parallel   *ParallelExecutor
+	workDir        string
+	claudePath     string
+	session        *Session
+	debug          bool
+	tagger         *tagging.Tagger
+	parallel       *ParallelExecutor
+	snapshotConfig SnapshotConfig
 
 	// Initial tags for planning context
 	initialTags []string
@@ -58,10 +59,11 @@ type Orchestrator struct {
 // New creates a new Orchestrator
 func New(workDir string) *Orchestrator {
 	return &Orchestrator{
-		workDir:    workDir,
-		claudePath: findClaudeBinary(),
-		tagger:     tagging.New(workDir),
-		parallel:   NewParallelExecutor(workDir),
+		workDir:        workDir,
+		claudePath:     findClaudeBinary(),
+		tagger:         tagging.New(workDir),
+		parallel:       NewParallelExecutor(workDir),
+		snapshotConfig: DefaultSnapshotConfig(),
 		session: &Session{
 			ID:       uuid.New().String(),
 			WorkDir:  workDir,
@@ -171,6 +173,35 @@ func (o *Orchestrator) SetInitialTags(tags []string) *Orchestrator {
 // GetInitialTags returns the initial file tags
 func (o *Orchestrator) GetInitialTags() []string {
 	return o.initialTags
+}
+
+// SetSnapshotConfig sets the snapshot configuration
+func (o *Orchestrator) SetSnapshotConfig(config SnapshotConfig) *Orchestrator {
+	o.snapshotConfig = config
+	return o
+}
+
+// GetSnapshotConfig returns the current snapshot configuration
+func (o *Orchestrator) GetSnapshotConfig() SnapshotConfig {
+	return o.snapshotConfig
+}
+
+// SetMaxTreeDepth sets the maximum directory tree depth
+func (o *Orchestrator) SetMaxTreeDepth(depth int) *Orchestrator {
+	o.snapshotConfig.MaxTreeDepth = depth
+	return o
+}
+
+// SetMaxFileSizeBytes sets the maximum file size for key files
+func (o *Orchestrator) SetMaxFileSizeBytes(size int64) *Orchestrator {
+	o.snapshotConfig.MaxFileSizeBytes = size
+	return o
+}
+
+// SetIncludeKeyFiles enables or disables automatic key file inclusion
+func (o *Orchestrator) SetIncludeKeyFiles(include bool) *Orchestrator {
+	o.snapshotConfig.IncludeKeyFiles = include
+	return o
 }
 
 // LoadSession loads a session from disk
@@ -849,6 +880,7 @@ func (o *Orchestrator) BuildIterationContext(iteration int, phase Phase, feature
 		Iteration:   iteration,
 		Phase:       phase,
 		TaggedFiles: make(map[string]string),
+		KeyFiles:    make(map[string]string),
 	}
 
 	// Read prd.json
@@ -864,10 +896,19 @@ func (o *Orchestrator) BuildIterationContext(iteration int, phase Phase, feature
 		ctx.ProgressContent = string(progressContent)
 	}
 
-	// Generate directory tree (basic implementation - can be enhanced later)
-	tree, err := o.generateDirectoryTree(4) // max 4 levels deep
+	// Generate directory tree with configurable depth
+	maxDepth := o.snapshotConfig.MaxTreeDepth
+	if maxDepth <= 0 {
+		maxDepth = 4 // default
+	}
+	tree, err := o.generateDirectoryTree(maxDepth)
 	if err == nil {
 		ctx.DirectoryTree = tree
+	}
+
+	// Detect and load key files if enabled
+	if o.snapshotConfig.IncludeKeyFiles {
+		ctx.KeyFiles = o.detectAndLoadKeyFiles()
 	}
 
 	// Set current feature context if provided
@@ -937,6 +978,144 @@ func (o *Orchestrator) walkDir(path, prefix string, depth, maxDepth int, sb *str
 	}
 
 	return nil
+}
+
+// keyFilePatterns defines patterns for automatically detected key files
+var keyFilePatterns = []string{
+	// Package managers / dependency files
+	"go.mod",
+	"go.sum",
+	"package.json",
+	"package-lock.json",
+	"yarn.lock",
+	"pnpm-lock.yaml",
+	"Cargo.toml",
+	"Cargo.lock",
+	"requirements.txt",
+	"pyproject.toml",
+	"Pipfile",
+	"Gemfile",
+	"composer.json",
+
+	// Documentation
+	"README.md",
+	"README",
+	"README.txt",
+	"CONTRIBUTING.md",
+	"CHANGELOG.md",
+
+	// Configuration
+	"Makefile",
+	"Dockerfile",
+	"docker-compose.yml",
+	"docker-compose.yaml",
+	".env.example",
+	"tsconfig.json",
+	"webpack.config.js",
+	"vite.config.js",
+	"vite.config.ts",
+	".eslintrc.json",
+	".prettierrc",
+
+	// CI/CD
+	".github/workflows/*.yml",
+	".github/workflows/*.yaml",
+	".gitlab-ci.yml",
+}
+
+// mainEntryPatterns defines patterns for main entry point files
+var mainEntryPatterns = []string{
+	"main.go",
+	"cmd/*/main.go",
+	"src/main.go",
+	"src/index.ts",
+	"src/index.js",
+	"index.ts",
+	"index.js",
+	"app.py",
+	"main.py",
+	"src/main.rs",
+	"src/lib.rs",
+}
+
+// detectAndLoadKeyFiles finds and loads key project files
+func (o *Orchestrator) detectAndLoadKeyFiles() map[string]string {
+	keyFiles := make(map[string]string)
+
+	maxSize := o.snapshotConfig.MaxFileSizeBytes
+	if maxSize <= 0 {
+		maxSize = 50 * 1024 // 50KB default
+	}
+
+	// Helper to add a file if it exists and is within size limits
+	addFile := func(relPath string) {
+		fullPath := filepath.Join(o.workDir, relPath)
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			return // File doesn't exist
+		}
+
+		if info.IsDir() {
+			return // Skip directories
+		}
+
+		if info.Size() > maxSize {
+			// File too large - add truncation note
+			keyFiles[relPath] = fmt.Sprintf("[File too large: %d bytes, max %d bytes]", info.Size(), maxSize)
+			return
+		}
+
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			return
+		}
+		keyFiles[relPath] = string(content)
+	}
+
+	// Helper to resolve glob patterns
+	resolveGlob := func(pattern string) []string {
+		matches, err := filepath.Glob(filepath.Join(o.workDir, pattern))
+		if err != nil {
+			return nil
+		}
+		var relPaths []string
+		for _, match := range matches {
+			relPath, err := filepath.Rel(o.workDir, match)
+			if err != nil {
+				continue
+			}
+			relPaths = append(relPaths, relPath)
+		}
+		return relPaths
+	}
+
+	// Check standard key file patterns
+	for _, pattern := range keyFilePatterns {
+		if strings.Contains(pattern, "*") {
+			// Glob pattern
+			for _, match := range resolveGlob(pattern) {
+				addFile(match)
+			}
+		} else {
+			// Exact file
+			addFile(pattern)
+		}
+	}
+
+	// Check main entry point patterns
+	for _, pattern := range mainEntryPatterns {
+		if strings.Contains(pattern, "*") {
+			// Glob pattern
+			for _, match := range resolveGlob(pattern) {
+				addFile(match)
+			}
+		} else {
+			// Exact file
+			addFile(pattern)
+		}
+	}
+
+	return keyFiles
 }
 
 // AddTaggedFile adds a file's contents to the iteration context

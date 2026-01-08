@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -913,4 +914,390 @@ func TestSetInitialTagsEmpty(t *testing.T) {
 	// Set nil tags
 	orch.SetInitialTags(nil)
 	assert.Nil(t, orch.GetInitialTags())
+}
+
+// Tests for codebase snapshot feature (feat-009)
+
+func TestDefaultSnapshotConfig(t *testing.T) {
+	config := DefaultSnapshotConfig()
+	assert.Equal(t, 4, config.MaxTreeDepth)
+	assert.Equal(t, int64(50*1024), config.MaxFileSizeBytes)
+	assert.True(t, config.IncludeKeyFiles)
+}
+
+func TestOrchestratorDefaultSnapshotConfig(t *testing.T) {
+	orch := New("/tmp/test")
+	config := orch.GetSnapshotConfig()
+
+	assert.Equal(t, 4, config.MaxTreeDepth)
+	assert.Equal(t, int64(50*1024), config.MaxFileSizeBytes)
+	assert.True(t, config.IncludeKeyFiles)
+}
+
+func TestSetSnapshotConfig(t *testing.T) {
+	orch := New("/tmp/test")
+
+	config := SnapshotConfig{
+		MaxTreeDepth:     6,
+		MaxFileSizeBytes: 100 * 1024,
+		IncludeKeyFiles:  false,
+	}
+
+	result := orch.SetSnapshotConfig(config)
+	assert.Equal(t, orch, result) // Test chaining
+
+	retrieved := orch.GetSnapshotConfig()
+	assert.Equal(t, 6, retrieved.MaxTreeDepth)
+	assert.Equal(t, int64(100*1024), retrieved.MaxFileSizeBytes)
+	assert.False(t, retrieved.IncludeKeyFiles)
+}
+
+func TestSetMaxTreeDepth(t *testing.T) {
+	orch := New("/tmp/test")
+
+	result := orch.SetMaxTreeDepth(8)
+	assert.Equal(t, orch, result) // Test chaining
+	assert.Equal(t, 8, orch.GetSnapshotConfig().MaxTreeDepth)
+}
+
+func TestSetMaxFileSizeBytes(t *testing.T) {
+	orch := New("/tmp/test")
+
+	result := orch.SetMaxFileSizeBytes(25 * 1024)
+	assert.Equal(t, orch, result) // Test chaining
+	assert.Equal(t, int64(25*1024), orch.GetSnapshotConfig().MaxFileSizeBytes)
+}
+
+func TestSetIncludeKeyFiles(t *testing.T) {
+	orch := New("/tmp/test")
+
+	result := orch.SetIncludeKeyFiles(false)
+	assert.Equal(t, orch, result) // Test chaining
+	assert.False(t, orch.GetSnapshotConfig().IncludeKeyFiles)
+
+	orch.SetIncludeKeyFiles(true)
+	assert.True(t, orch.GetSnapshotConfig().IncludeKeyFiles)
+}
+
+func TestDetectKeyFilesGoProject(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a Go project structure
+	err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test\n\ngo 1.21"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n\nfunc main() {}"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("# Test Project"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "Makefile"), []byte("build:\n\tgo build"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	// Should have detected key files
+	assert.NotEmpty(t, ctx.KeyFiles)
+	assert.Contains(t, ctx.KeyFiles, "go.mod")
+	assert.Contains(t, ctx.KeyFiles, "main.go")
+	assert.Contains(t, ctx.KeyFiles, "README.md")
+	assert.Contains(t, ctx.KeyFiles, "Makefile")
+}
+
+func TestDetectKeyFilesNodeProject(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a Node.js project structure
+	err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(`{"name": "test", "version": "1.0.0"}`), 0644)
+	require.NoError(t, err)
+	err = os.MkdirAll(filepath.Join(tmpDir, "src"), 0755)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "src", "index.js"), []byte("console.log('hello')"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, ctx.KeyFiles, "package.json")
+	assert.Contains(t, ctx.KeyFiles, "src/index.js")
+}
+
+func TestDetectKeyFilesRustProject(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a Rust project structure
+	err := os.WriteFile(filepath.Join(tmpDir, "Cargo.toml"), []byte("[package]\nname = \"test\""), 0644)
+	require.NoError(t, err)
+	err = os.MkdirAll(filepath.Join(tmpDir, "src"), 0755)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "src", "main.rs"), []byte("fn main() {}"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, ctx.KeyFiles, "Cargo.toml")
+	assert.Contains(t, ctx.KeyFiles, "src/main.rs")
+}
+
+func TestDetectKeyFilesPythonProject(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a Python project structure
+	err := os.WriteFile(filepath.Join(tmpDir, "requirements.txt"), []byte("requests==2.28.0"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "main.py"), []byte("print('hello')"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, ctx.KeyFiles, "requirements.txt")
+	assert.Contains(t, ctx.KeyFiles, "main.py")
+}
+
+func TestKeyFileSizeLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a file larger than the limit
+	largeContent := strings.Repeat("x", 60*1024) // 60KB
+	err := os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte(largeContent), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	// The file should be listed but with a truncation note
+	content, exists := ctx.KeyFiles["README.md"]
+	assert.True(t, exists)
+	assert.Contains(t, content, "File too large")
+	assert.Contains(t, content, "61440 bytes") // 60 * 1024
+}
+
+func TestKeyFileSizeLimitCustom(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a file of 30KB
+	mediumContent := strings.Repeat("y", 30*1024)
+	err := os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte(mediumContent), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+
+	// Default (50KB limit) should include it
+	orch := New(tmpDir)
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, mediumContent, ctx.KeyFiles["README.md"])
+
+	// With 25KB limit, should show truncation note
+	orch.SetMaxFileSizeBytes(25 * 1024)
+	ctx, err = orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+	assert.Contains(t, ctx.KeyFiles["README.md"], "File too large")
+}
+
+func TestDisableKeyFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+	orch.SetIncludeKeyFiles(false)
+
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	// KeyFiles should be empty when disabled
+	assert.Empty(t, ctx.KeyFiles)
+}
+
+func TestConfigurableTreeDepth(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create nested directories
+	deepDir := filepath.Join(tmpDir, "a", "b", "c", "d", "e", "f")
+	err := os.MkdirAll(deepDir, 0755)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(deepDir, "deep.txt"), []byte("deep"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+
+	// With depth 2, should not see deep directories
+	orch := New(tmpDir)
+	orch.SetMaxTreeDepth(2)
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, ctx.DirectoryTree, "a/")
+	// Depth 2 should include a/b but not a/b/c
+	assert.Contains(t, ctx.DirectoryTree, "b/")
+	assert.NotContains(t, ctx.DirectoryTree, "deep.txt")
+
+	// With depth 6, should see everything
+	orch.SetMaxTreeDepth(7)
+	ctx, err = orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, ctx.DirectoryTree, "deep.txt")
+}
+
+func TestKeyFilesInPrompt(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	prompt := ctx.BuildPrompt()
+
+	assert.Contains(t, prompt, "## Key Files")
+	assert.Contains(t, prompt, "automatically detected important project files")
+	assert.Contains(t, prompt, "### go.mod")
+	assert.Contains(t, prompt, "module test")
+}
+
+func TestIterationContextKeyFilesSerialization(t *testing.T) {
+	ctx := &IterationContext{
+		PRDContent: `{"name": "Test"}`,
+		KeyFiles: map[string]string{
+			"go.mod":  "module test",
+			"main.go": "package main",
+		},
+		Iteration: 1,
+	}
+
+	data, err := json.Marshal(ctx)
+	require.NoError(t, err)
+
+	var restored IterationContext
+	err = json.Unmarshal(data, &restored)
+	require.NoError(t, err)
+
+	assert.Len(t, restored.KeyFiles, 2)
+	assert.Equal(t, "module test", restored.KeyFiles["go.mod"])
+	assert.Equal(t, "package main", restored.KeyFiles["main.go"])
+}
+
+func TestSnapshotConfigSerialization(t *testing.T) {
+	config := SnapshotConfig{
+		MaxTreeDepth:     5,
+		MaxFileSizeBytes: 100 * 1024,
+		IncludeKeyFiles:  false,
+	}
+
+	data, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	var restored SnapshotConfig
+	err = json.Unmarshal(data, &restored)
+	require.NoError(t, err)
+
+	assert.Equal(t, 5, restored.MaxTreeDepth)
+	assert.Equal(t, int64(100*1024), restored.MaxFileSizeBytes)
+	assert.False(t, restored.IncludeKeyFiles)
+}
+
+func TestKeyFilePatternsConstant(t *testing.T) {
+	// Verify key patterns include expected files
+	expectedPatterns := []string{
+		"go.mod",
+		"package.json",
+		"Cargo.toml",
+		"README.md",
+		"Makefile",
+	}
+
+	for _, pattern := range expectedPatterns {
+		found := false
+		for _, p := range keyFilePatterns {
+			if p == pattern {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Expected pattern %s to be in keyFilePatterns", pattern)
+	}
+}
+
+func TestMainEntryPatternsConstant(t *testing.T) {
+	// Verify main entry patterns include expected files
+	expectedPatterns := []string{
+		"main.go",
+		"src/index.js",
+		"main.py",
+	}
+
+	for _, pattern := range expectedPatterns {
+		found := false
+		for _, p := range mainEntryPatterns {
+			if p == pattern {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Expected pattern %s to be in mainEntryPatterns", pattern)
+	}
+}
+
+func TestNoKeyFilesIfNoneExist(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create only prd.json (required) and a random file
+	err := os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "random.xyz"), []byte("random"), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	// Should have empty key files (random.xyz is not a key file)
+	assert.Empty(t, ctx.KeyFiles)
+}
+
+func TestCmdMainGoPattern(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create cmd/myapp/main.go structure
+	cmdDir := filepath.Join(tmpDir, "cmd", "myapp")
+	err := os.MkdirAll(cmdDir, 0755)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(cmdDir, "main.go"), []byte("package main"), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
+	require.NoError(t, err)
+
+	orch := New(tmpDir)
+	ctx, err := orch.BuildIterationContext(1, "", nil)
+	require.NoError(t, err)
+
+	// Should detect cmd/myapp/main.go
+	assert.Contains(t, ctx.KeyFiles, "cmd/myapp/main.go")
 }
