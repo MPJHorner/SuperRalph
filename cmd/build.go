@@ -151,16 +151,44 @@ func runBuild(cmd *cobra.Command, args []string) {
 		}).
 		OnThinking(func(thinking string) {
 			if buildDebug {
-				program.Send(tui.LogMsg("[thinking] " + thinking))
+				program.Send(tui.TypedLogMsg{Type: components.LogTypeInfo, Content: "[thinking] " + thinking})
 			}
 		}).
 		OnDebug(func(msg string) {
 			if buildDebug {
-				program.Send(tui.LogMsg("[debug] " + msg))
+				program.Send(tui.TypedLogMsg{Type: components.LogTypeInfo, Content: "[debug] " + msg})
 			}
 		}).
 		OnOutput(func(line string) {
 			program.Send(tui.LogMsg(line))
+		}).
+		OnTypedOutput(func(outputType orchestrator.OutputType, content string) {
+			// Map orchestrator output types to TUI log entry types
+			var logType components.LogEntryType
+			switch outputType {
+			case orchestrator.OutputText:
+				logType = components.LogTypeText
+			case orchestrator.OutputToolUse:
+				logType = components.LogTypeToolUse
+			case orchestrator.OutputToolInput:
+				logType = components.LogTypeToolInput
+			case orchestrator.OutputToolResult:
+				logType = components.LogTypeToolResult
+			case orchestrator.OutputPhase:
+				logType = components.LogTypePhase
+			case orchestrator.OutputSuccess:
+				logType = components.LogTypeSuccess
+			case orchestrator.OutputError:
+				logType = components.LogTypeError
+			case orchestrator.OutputInfo:
+				logType = components.LogTypeInfo
+			default:
+				logType = components.LogTypeText
+			}
+			program.Send(tui.TypedLogMsg{Type: logType, Content: content})
+		}).
+		OnActivity(func(activity string) {
+			program.Send(tui.ActivityMsg(activity))
 		}).
 		OnAction(func(action orchestrator.Action, params orchestrator.ActionParams) {
 			switch action {

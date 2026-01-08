@@ -61,6 +61,9 @@ type Model struct {
 	// Phase tracking
 	CurrentPhase components.Phase
 
+	// Current activity (what Claude is doing right now)
+	CurrentActivity string
+
 	// UI components
 	Spinner        spinner.Model
 	LogView        *components.LogView
@@ -108,8 +111,17 @@ type (
 	// TickMsg is sent periodically to update the UI
 	TickMsg time.Time
 
-	// LogMsg adds a line to the log
+	// LogMsg adds a plain text line to the log
 	LogMsg string
+
+	// TypedLogMsg adds a colored/typed line to the log
+	TypedLogMsg struct {
+		Type    components.LogEntryType
+		Content string
+	}
+
+	// ActivityMsg updates the current activity display
+	ActivityMsg string
 
 	// StateChangeMsg changes the run state
 	StateChangeMsg RunState
@@ -231,6 +243,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case LogMsg:
 		m.LogView.AddLine(string(msg))
+
+	case TypedLogMsg:
+		m.LogView.AddEntry(msg.Type, msg.Content)
+
+	case ActivityMsg:
+		m.CurrentActivity = string(msg)
 
 	case StateChangeMsg:
 		m.State = RunState(msg)
@@ -416,6 +434,13 @@ func (m Model) renderStatus() string {
 	if m.CurrentFeature != nil {
 		b.WriteString(fmt.Sprintf("Feature: %s ", HighlightStyle.Render(m.CurrentFeature.ID)))
 		b.WriteString(fmt.Sprintf("\"%s\"\n", m.CurrentFeature.Description))
+	}
+
+	// Current activity (what Claude is doing right now)
+	if m.CurrentActivity != "" && m.State == StateRunning {
+		activityStyle := lipgloss.NewStyle().Foreground(ColorSecondary)
+		b.WriteString(activityStyle.Render("Activity: " + m.CurrentActivity))
+		b.WriteString("\n")
 	}
 
 	// Elapsed time

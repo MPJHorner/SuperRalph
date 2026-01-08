@@ -293,7 +293,8 @@ func (o *Orchestrator) RunFeatureLoop(ctx context.Context, feature *FeatureConte
 
 		// === PLANNING PHASE ===
 		o.debugLog("Starting PLANNING phase (attempt %d/%d)", validationAttempt, config.MaxValidationAttempts)
-		fmt.Printf("\n  [Phase: PLANNING (attempt %d/%d)]\n", validationAttempt, config.MaxValidationAttempts)
+		o.typedOutput(OutputPhase, fmt.Sprintf("Phase: PLANNING (attempt %d/%d)", validationAttempt, config.MaxValidationAttempts))
+		o.activity("Planning...")
 
 		planCtx, err := o.BuildIterationContext(validationAttempt, PhasePlanning, feature)
 		if err != nil {
@@ -316,7 +317,8 @@ func (o *Orchestrator) RunFeatureLoop(ctx context.Context, feature *FeatureConte
 
 		// === VALIDATION PHASE ===
 		o.debugLog("Starting VALIDATION phase")
-		fmt.Println("\n  [Phase: VALIDATING]")
+		o.typedOutput(OutputPhase, "Phase: VALIDATING")
+		o.activity("Validating plan...")
 
 		validateCtx, err := o.BuildIterationContext(validationAttempt, PhaseValidating, feature)
 		if err != nil {
@@ -334,7 +336,7 @@ func (o *Orchestrator) RunFeatureLoop(ctx context.Context, feature *FeatureConte
 
 		if validationResult.Valid {
 			o.debugLog("Plan validated successfully")
-			fmt.Println("  [Validation: PASSED]")
+			o.typedOutput(OutputSuccess, "Validation: PASSED")
 			break
 		}
 
@@ -348,7 +350,7 @@ func (o *Orchestrator) RunFeatureLoop(ctx context.Context, feature *FeatureConte
 		}
 
 		o.debugLog("Validation failed, feedback: %s", validationFeedback)
-		fmt.Printf("  [Validation: FAILED - %d issues]\n", len(validationResult.Issues))
+		o.typedOutput(OutputError, fmt.Sprintf("Validation: FAILED - %d issues", len(validationResult.Issues)))
 
 		if validationAttempt >= config.MaxValidationAttempts {
 			return "", fmt.Errorf("validation failed after %d attempts: %s", config.MaxValidationAttempts, validationFeedback)
@@ -357,7 +359,8 @@ func (o *Orchestrator) RunFeatureLoop(ctx context.Context, feature *FeatureConte
 
 	// === EXECUTION PHASE ===
 	o.debugLog("Starting EXECUTION phase")
-	fmt.Println("\n  [Phase: EXECUTING]")
+	o.typedOutput(OutputPhase, "Phase: EXECUTING")
+	o.activity("Executing plan...")
 
 	executeCtx, err := o.BuildIterationContext(validationAttempt, PhaseExecuting, feature)
 	if err != nil {
@@ -370,7 +373,8 @@ func (o *Orchestrator) RunFeatureLoop(ctx context.Context, feature *FeatureConte
 		return "", fmt.Errorf("execution phase failed: %w", err)
 	}
 
-	fmt.Println("  [Phase: COMPLETE]")
+	o.typedOutput(OutputSuccess, "Phase: COMPLETE")
+	o.activity("Complete")
 	return executionOutput, nil
 }
 
@@ -423,7 +427,7 @@ func (o *Orchestrator) runClaudeWithOutput(ctx context.Context, prompt string) (
 
 		var event map[string]any
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			fmt.Println(line)
+			o.output(line)
 			continue
 		}
 
@@ -439,19 +443,25 @@ func (o *Orchestrator) runClaudeWithOutput(ctx context.Context, prompt string) (
 							switch blockType {
 							case "text":
 								if text, ok := blockMap["text"].(string); ok {
-									fmt.Println(text)
+									o.typedOutput(OutputText, text)
 									outputBuilder.WriteString(text)
 									outputBuilder.WriteString("\n")
 								}
 							case "tool_use":
 								if name, ok := blockMap["name"].(string); ok {
-									fmt.Printf("\n  [Using tool: %s]\n", name)
+									o.typedOutput(OutputToolUse, fmt.Sprintf("Using tool: %s", name))
 									if input, ok := blockMap["input"].(map[string]any); ok {
-										if cmd, ok := input["command"].(string); ok {
-											fmt.Printf("  > %s\n", cmd)
+										if cmdStr, ok := input["command"].(string); ok {
+											o.typedOutput(OutputToolInput, "> "+cmdStr)
+											o.activity(fmt.Sprintf("Running: %s", truncateString(cmdStr, 50)))
 										}
 										if path, ok := input["file_path"].(string); ok {
-											fmt.Printf("  > %s\n", path)
+											o.typedOutput(OutputToolInput, "> "+path)
+											o.activity(fmt.Sprintf("%s: %s", name, path))
+										}
+										if filePath, ok := input["filePath"].(string); ok {
+											o.typedOutput(OutputToolInput, "> "+filePath)
+											o.activity(fmt.Sprintf("%s: %s", name, filePath))
 										}
 									}
 								}
@@ -467,16 +477,16 @@ func (o *Orchestrator) runClaudeWithOutput(ctx context.Context, prompt string) (
 					for _, block := range content {
 						if blockMap, ok := block.(map[string]any); ok {
 							if blockMap["type"] == "tool_result" {
-								if content, ok := blockMap["content"].(string); ok {
-									lines := strings.Split(content, "\n")
-									if len(lines) > 10 {
-										for _, line := range lines[:5] {
-											fmt.Printf("    %s\n", line)
+								if contentStr, ok := blockMap["content"].(string); ok {
+									lines := strings.Split(contentStr, "\n")
+									if len(lines) > 5 {
+										for _, l := range lines[:5] {
+											o.typedOutput(OutputToolResult, "  "+l)
 										}
-										fmt.Printf("    ... (%d more lines)\n", len(lines)-5)
+										o.typedOutput(OutputToolResult, fmt.Sprintf("  ... (%d more lines)", len(lines)-5))
 									} else {
-										for _, line := range lines {
-											fmt.Printf("    %s\n", line)
+										for _, l := range lines {
+											o.typedOutput(OutputToolResult, "  "+l)
 										}
 									}
 								}
@@ -491,19 +501,21 @@ func (o *Orchestrator) runClaudeWithOutput(ctx context.Context, prompt string) (
 			subtype, _ := event["subtype"].(string)
 
 			if result, ok := event["result"].(string); ok && result != "" {
-				fmt.Printf("\n%s\n", result)
+				o.typedOutput(OutputText, result)
 				outputBuilder.WriteString(result)
 			}
 
-			fmt.Printf("\n  [%s: %.1fs", subtype, elapsed)
+			// Build stats message
+			statsMsg := fmt.Sprintf("%s: %.1fs", subtype, elapsed)
 			if cost, ok := event["total_cost_usd"].(float64); ok {
-				fmt.Printf(", $%.4f", cost)
+				statsMsg += fmt.Sprintf(", $%.4f", cost)
 			}
-			fmt.Println("]")
+			o.typedOutput(OutputInfo, statsMsg)
 
 		case "error":
 			if errData, ok := event["error"].(map[string]any); ok {
 				if msg, ok := errData["message"].(string); ok {
+					o.typedOutput(OutputError, "Claude error: "+msg)
 					return "", fmt.Errorf("claude error: %s", msg)
 				}
 			}
