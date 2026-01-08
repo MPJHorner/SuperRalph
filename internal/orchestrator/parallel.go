@@ -184,7 +184,7 @@ func (pe *ParallelExecutor) executeParallel(
 				results[idx] = ActionResult{
 					Action:  act,
 					Success: false,
-					Error:   "context cancelled",
+					Error:   "context canceled",
 				}
 				return
 			}
@@ -211,7 +211,7 @@ func (pe *ParallelExecutor) executeRead(ctx context.Context, action SubAction) A
 	for _, path := range action.Params.Paths {
 		select {
 		case <-ctx.Done():
-			result.Error = "context cancelled"
+			result.Error = "context canceled"
 			return result
 		default:
 		}
@@ -241,7 +241,7 @@ func (pe *ParallelExecutor) executeWrite(ctx context.Context, action SubAction) 
 
 	select {
 	case <-ctx.Done():
-		result.Error = "context cancelled"
+		result.Error = "context canceled"
 		return result
 	default:
 	}
@@ -292,7 +292,7 @@ func (pe *ParallelExecutor) executeCommand(ctx context.Context, action SubAction
 
 	if err != nil {
 		if ctx.Err() != nil {
-			result.Error = "context cancelled"
+			result.Error = "context canceled"
 		} else {
 			result.Error = err.Error()
 		}
@@ -309,7 +309,7 @@ func (pe *ParallelExecutor) executeOther(ctx context.Context, action SubAction) 
 
 	select {
 	case <-ctx.Done():
-		result.Error = "context cancelled"
+		result.Error = "context canceled"
 		return result
 	default:
 	}

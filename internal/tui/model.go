@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
 	"github.com/mpjhorner/superralph/internal/prd"
 	"github.com/mpjhorner/superralph/internal/tui/components"
 )

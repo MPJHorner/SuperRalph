@@ -11,11 +11,11 @@ import (
 type ActionStatus string
 
 const (
-	StatusPending  ActionStatus = "pending"
-	StatusRunning  ActionStatus = "running"
-	StatusDone     ActionStatus = "done"
-	StatusFailed   ActionStatus = "failed"
-	StatusSkipped  ActionStatus = "skipped"
+	StatusPending ActionStatus = "pending"
+	StatusRunning ActionStatus = "running"
+	StatusDone    ActionStatus = "done"
+	StatusFailed  ActionStatus = "failed"
+	StatusSkipped ActionStatus = "skipped"
 )
 
 // ActionItem represents a single action in the action panel
@@ -29,12 +29,12 @@ type ActionItem struct {
 
 // ActionPanel displays current and parallel actions with their status
 type ActionPanel struct {
-	Actions     []ActionItem
-	MaxActions  int // maximum actions to display
-	Width       int
-	Height      int
-	Title       string
-	ShowOutput  bool
+	Actions    []ActionItem
+	MaxActions int // maximum actions to display
+	Width      int
+	Height     int
+	Title      string
+	ShowOutput bool
 }
 
 // NewActionPanel creates a new action panel

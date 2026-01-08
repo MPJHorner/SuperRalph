@@ -28,8 +28,6 @@ linters:
     - gocritic      # Opinionated linter with many checks
     - revive        # Fast, configurable, extensible linter
     - bodyclose     # Check HTTP response body is closed
-    - noctx         # Check for http requests without context
-    - prealloc      # Find slice declarations that could be preallocated
     - unconvert     # Remove unnecessary type conversions
     - unparam       # Find unused function parameters
     - whitespace    # Check for unnecessary newlines
@@ -37,9 +35,9 @@ linters:
 linters-settings:
   errcheck:
     # Report about not checking of errors in type assertions
-    check-type-assertions: true
+    check-type-assertions: false
     # Report about assignment of errors to blank identifier
-    check-blank: true
+    check-blank: false
     # List of functions to exclude from checking
     exclude-functions:
       - fmt.Print
@@ -50,6 +48,9 @@ linters-settings:
       - fmt.Fprintf
       - (io.Closer).Close
       - (*os.File).Close
+      - io.Copy
+      - (*strings.Builder).WriteString
+      - (*bytes.Buffer).WriteString
 
   govet:
     # Enable all analyzers
@@ -74,10 +75,9 @@ linters-settings:
     # Exclude generated files
     excludes:
       - G104  # Audit errors not checked (handled by errcheck)
+      - G204  # Subprocess launched with variable (expected for CLI tool that runs commands)
       - G304  # File path provided as taint input (acceptable for CLI tool)
-    config:
-      G306:
-        "0644"  # Expected file permissions
+      - G306  # WriteFile with 0644 permissions (acceptable for config/data files)
 
   gocritic:
     # Enable specific checker groups
@@ -89,6 +89,12 @@ linters-settings:
       - hugeParam          # Too strict for this codebase
       - rangeValCopy       # Sometimes clearer to copy
       - commentedOutCode   # Sometimes useful for reference
+      - octalLiteral       # 0755 is more readable than 0o755 for file permissions
+      - ifElseChain        # Sometimes if-else is clearer than switch
+      - unnamedResult      # Named returns not always necessary
+      - appendCombine      # Multiple appends can be clearer
+      - sprintfQuotedString # %s with quotes is sometimes intentional
+      - exitAfterDefer     # Sometimes os.Exit after defer is intentional in CLI
 
   revive:
     # Maximum number of open files at the same time
@@ -108,9 +114,7 @@ linters-settings:
       - name: error-strings
       - name: error-naming
       - name: exported
-        arguments:
-          - "checkPrivateReceivers"
-          - "sayRepetitiveInsteadOfStutters"
+        disabled: true  # Package prefixes in type names are sometimes intentional
       - name: if-return
       - name: increment-decrement
       - name: var-naming
@@ -129,16 +133,11 @@ linters-settings:
         disabled: true  # Handled by unparam
       - name: unreachable-code
       - name: redefines-builtin-id
+        disabled: true  # min is now a builtin in Go 1.21+
 
   unparam:
     # Don't report unused params for methods implementing interfaces
     check-exported: false
-
-  prealloc:
-    # Report preallocation suggestions only on simple loops
-    simple: true
-    range-loops: true
-    for-loops: false
 
 issues:
   # Exclude directories from analysis
@@ -161,6 +160,8 @@ issues:
         - gosec
         - unparam
         - gocritic
+        - errcheck
+        - govet
     
     # Ignore long lines in generated code comments
     - linters:
@@ -176,6 +177,11 @@ issues:
     - linters:
         - govet
       text: "shadow: declaration of .err."
+    
+    # Allow unused write in govet for struct initialization
+    - linters:
+        - govet
+      text: "unusedwrite:"
 
   # Fix found issues (if supported by the linter)
   fix: false

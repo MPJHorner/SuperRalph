@@ -9,9 +9,10 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/spf13/cobra"
+
 	"github.com/mpjhorner/superralph/internal/orchestrator"
 	"github.com/mpjhorner/superralph/internal/prd"
-	"github.com/spf13/cobra"
 )
 
 var planDebug bool
@@ -61,7 +62,7 @@ func runPlan(cmd *cobra.Command, args []string) {
 
 		err := form.Run()
 		if err != nil || !confirm {
-			fmt.Println("Cancelled")
+			fmt.Println("Canceled")
 			os.Exit(0)
 		}
 
@@ -131,7 +132,7 @@ func runPlan(cmd *cobra.Command, args []string) {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		fmt.Println("\n\nCancelling...")
+		fmt.Println("\n\nCanceling...")
 		cancel()
 	}()
 
@@ -139,7 +140,7 @@ func runPlan(cmd *cobra.Command, args []string) {
 	err = orch.RunPlan(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
-			fmt.Println(warnStyle.Render("⚠") + " Planning session cancelled")
+			fmt.Println(warnStyle.Render("⚠") + " Planning session canceled")
 			os.Exit(0)
 		}
 		fmt.Println()

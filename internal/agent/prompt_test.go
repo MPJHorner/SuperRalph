@@ -3,8 +3,9 @@ package agent
 import (
 	"testing"
 
-	"github.com/mpjhorner/superralph/internal/prd"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/mpjhorner/superralph/internal/prd"
 )
 
 func TestBuildPrompt(t *testing.T) {

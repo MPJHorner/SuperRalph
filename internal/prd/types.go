@@ -206,16 +206,6 @@ func (p *PRD) getBlockedHigherPriorityFeatures(selectedPriority Priority) []stri
 	return blocked
 }
 
-// getSkippedForDependencies returns IDs of features at the given priority that are skipped due to unmet dependencies
-func (p *PRD) getSkippedForDependencies(priority Priority) []string {
-	return lo.FilterMap(p.Features, func(f Feature, _ int) (string, bool) {
-		if !f.Passes && f.Priority == priority && !p.DependenciesMet(&f) {
-			return f.ID, true
-		}
-		return "", false
-	})
-}
-
 // DependenciesMet returns true if all dependencies of the feature have passes: true
 func (p *PRD) DependenciesMet(f *Feature) bool {
 	if len(f.DependsOn) == 0 {

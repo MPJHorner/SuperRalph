@@ -6,11 +6,14 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/spf13/cobra"
+
 	"github.com/mpjhorner/superralph/internal/prd"
 	"github.com/mpjhorner/superralph/internal/progress"
 	"github.com/mpjhorner/superralph/internal/tui"
-	"github.com/spf13/cobra"
 )
+
+const refreshInterval = 2 * time.Second
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
@@ -92,7 +95,6 @@ func runStatus(cmd *cobra.Command, args []string) {
 // statusModel wraps the TUI model for status-only mode
 type statusModel struct {
 	tui.Model
-	lastRefresh time.Time
 }
 
 func (m statusModel) Init() tea.Cmd {
@@ -103,7 +105,7 @@ func (m statusModel) Init() tea.Cmd {
 }
 
 func refreshTick() tea.Cmd {
-	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg {
 		return refreshMsg{}
 	})
 }

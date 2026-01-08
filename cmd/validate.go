@@ -5,8 +5,9 @@ import (
 	"os"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mpjhorner/superralph/internal/prd"
 	"github.com/spf13/cobra"
+
+	"github.com/mpjhorner/superralph/internal/prd"
 )
 
 var validateCmd = &cobra.Command{

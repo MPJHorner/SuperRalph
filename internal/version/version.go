@@ -224,10 +224,3 @@ func SelfUpdate() error {
 	fmt.Printf("Successfully updated to %s\n", release.TagName)
 	return nil
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

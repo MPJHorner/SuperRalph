@@ -188,7 +188,7 @@ func (r *Runner) RunInteractive(ctx context.Context, systemPrompt string) error 
 	r.cmd.Stderr = os.Stderr
 
 	if err := r.cmd.Run(); err != nil {
-		// Check if it was cancelled
+		// Check if it was canceled
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

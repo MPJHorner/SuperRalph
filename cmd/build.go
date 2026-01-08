@@ -10,11 +10,12 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/spf13/cobra"
+
 	"github.com/mpjhorner/superralph/internal/git"
 	"github.com/mpjhorner/superralph/internal/notify"
 	"github.com/mpjhorner/superralph/internal/orchestrator"
 	"github.com/mpjhorner/superralph/internal/prd"
-	"github.com/spf13/cobra"
 )
 
 var buildDebug bool
@@ -110,7 +111,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 
 	err = form.Run()
 	if err != nil {
-		fmt.Println("Cancelled")
+		fmt.Println("Canceled")
 		os.Exit(0)
 	}
 
@@ -195,7 +196,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		fmt.Println("\n\nCancelling build...")
+		fmt.Println("\n\nCanceling build...")
 		cancel()
 	}()
 
@@ -204,14 +205,14 @@ func runBuild(cmd *cobra.Command, args []string) {
 	if err != nil {
 		if ctx.Err() != nil {
 			fmt.Println()
-			fmt.Println(warnStyle.Render("⚠") + " Build cancelled")
-			notify.Send("SuperRalph", "Build cancelled by user")
+			fmt.Println(warnStyle.Render("⚠") + " Build canceled")
+			_ = notify.Send("SuperRalph", "Build canceled by user")
 			os.Exit(0)
 		}
 		fmt.Println()
 		fmt.Println(errorStyle.Render("✗") + " Build failed")
 		fmt.Println(dimStyle.Render("  " + err.Error()))
-		notify.SendError("Build failed: " + err.Error())
+		_ = notify.SendError("Build failed: " + err.Error())
 		os.Exit(1)
 	}
 
@@ -222,7 +223,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 		if p.IsComplete() {
 			fmt.Println()
 			fmt.Println(successStyle.Render("✓") + " All features complete!")
-			notify.SendSuccess("PRD complete! All features implemented.")
+			_ = notify.SendSuccess("PRD complete! All features implemented.")
 		} else {
 			fmt.Println()
 			fmt.Printf("%s %d/%d features complete\n",
@@ -230,7 +231,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 				stats.PassingFeatures,
 				stats.TotalFeatures)
 			fmt.Println(dimStyle.Render("  Run 'superralph build' again to continue"))
-			notify.Send("SuperRalph", fmt.Sprintf("Build paused: %d/%d features complete", stats.PassingFeatures, stats.TotalFeatures))
+			_ = notify.Send("SuperRalph", fmt.Sprintf("Build paused: %d/%d features complete", stats.PassingFeatures, stats.TotalFeatures))
 		}
 	}
 }

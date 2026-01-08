@@ -4,10 +4,11 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mpjhorner/superralph/internal/prd"
-	"github.com/mpjhorner/superralph/internal/tui/components"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mpjhorner/superralph/internal/prd"
+	"github.com/mpjhorner/superralph/internal/tui/components"
 )
 
 func createTestPRD() *prd.PRD {

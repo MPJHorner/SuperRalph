@@ -5,8 +5,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/mpjhorner/superralph/internal/version"
 	"github.com/spf13/cobra"
+
+	"github.com/mpjhorner/superralph/internal/version"
 )
 
 var rootCmd = &cobra.Command{
@@ -71,10 +72,4 @@ func checkForUpdateInBackground() {
 
 func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
-}
-
-// exitWithError prints an error message and exits
-func exitWithError(msg string) {
-	fmt.Fprintln(os.Stderr, "Error:", msg)
-	os.Exit(1)
 }

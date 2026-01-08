@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/mpjhorner/superralph/internal/tagging"
 )
 
@@ -516,7 +517,7 @@ func parseValidation(output string) ValidationResult {
 
 		if strings.HasPrefix(line, "valid:") {
 			value := strings.TrimSpace(strings.TrimPrefix(line, "valid:"))
-			result.Valid = strings.ToLower(value) == "true"
+			result.Valid = strings.EqualFold(value, "true")
 		} else if strings.HasPrefix(line, "issues:") {
 			// Issues section started
 			continue
@@ -814,7 +815,7 @@ func (o *Orchestrator) walkDir(path, prefix string, depth, maxDepth int, sb *str
 			if isLast {
 				newPrefix = prefix + "    "
 			}
-			o.walkDir(filepath.Join(path, entry.Name()), newPrefix, depth+1, maxDepth, sb)
+			_ = o.walkDir(filepath.Join(path, entry.Name()), newPrefix, depth+1, maxDepth, sb)
 		}
 	}
 
