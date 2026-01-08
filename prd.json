@@ -213,7 +213,7 @@
         "Add filtering: Press '/' to fuzzy search features by ID or description",
         "Test scrolling behavior with mouse wheel and keyboard navigation (j/k)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "feat-015",

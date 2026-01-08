@@ -73,16 +73,17 @@ type Model struct {
 	ActiveTab components.Tab
 
 	// UI components
-	Spinner        spinner.Model
-	LogView        *components.LogView
-	LogTab         *components.LogTab
-	Dashboard      *components.Dashboard
-	PhaseIndicator *components.PhaseIndicator
-	ActionPanel    *components.ActionPanel
-	FeatureList    *components.FeatureList
-	StepIndicator  *components.StepIndicator
-	Width          int
-	Height         int
+	Spinner                spinner.Model
+	LogView                *components.LogView
+	LogTab                 *components.LogTab
+	Dashboard              *components.Dashboard
+	PhaseIndicator         *components.PhaseIndicator
+	ActionPanel            *components.ActionPanel
+	FeatureList            *components.FeatureList
+	InteractiveFeatureList *components.InteractiveFeatureList
+	StepIndicator          *components.StepIndicator
+	Width                  int
+	Height                 int
 
 	// Debug mode
 	DebugMode bool
@@ -100,9 +101,13 @@ func NewModel(p *prd.PRD, prdPath string, maxIterations int) Model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(ColorPrimary)
 
-	// Initialize feature list
+	// Initialize feature list (compact view for dashboard)
 	featureList := components.NewFeatureList(30, 15)
 	featureList.UpdateFromPRD(p, "")
+
+	// Initialize interactive feature list (full view for features tab)
+	interactiveFeatureList := components.NewInteractiveFeatureList(80, 20)
+	interactiveFeatureList.SetPRD(p, "")
 
 	// Initialize dashboard
 	dashboard := components.NewDashboard(80, 20)
@@ -117,27 +122,28 @@ func NewModel(p *prd.PRD, prdPath string, maxIterations int) Model {
 	logTab := components.NewLogTab(80, 15)
 
 	return Model{
-		PRD:            p,
-		PRDPath:        prdPath,
-		PRDStats:       p.Stats(),
-		State:          StateIdle,
-		MaxIterations:  maxIterations,
-		MaxRetries:     3,
-		CurrentPhase:   components.PhaseNone,
-		CurrentStep:    orchestrator.StepIdle,
-		TabBar:         tabBar,
-		ActiveTab:      components.TabDashboard,
-		Spinner:        s,
-		LogView:        components.NewLogView(80, 10),
-		LogTab:         logTab,
-		Dashboard:      dashboard,
-		PhaseIndicator: components.NewPhaseIndicator(),
-		ActionPanel:    components.NewActionPanel(80, 8),
-		FeatureList:    featureList,
-		StepIndicator:  components.NewStepIndicator(),
-		Width:          80,
-		Height:         24,
-		DebugMode:      false,
+		PRD:                    p,
+		PRDPath:                prdPath,
+		PRDStats:               p.Stats(),
+		State:                  StateIdle,
+		MaxIterations:          maxIterations,
+		MaxRetries:             3,
+		CurrentPhase:           components.PhaseNone,
+		CurrentStep:            orchestrator.StepIdle,
+		TabBar:                 tabBar,
+		ActiveTab:              components.TabDashboard,
+		Spinner:                s,
+		LogView:                components.NewLogView(80, 10),
+		LogTab:                 logTab,
+		Dashboard:              dashboard,
+		PhaseIndicator:         components.NewPhaseIndicator(),
+		ActionPanel:            components.NewActionPanel(80, 8),
+		FeatureList:            featureList,
+		InteractiveFeatureList: interactiveFeatureList,
+		StepIndicator:          components.NewStepIndicator(),
+		Width:                  80,
+		Height:                 24,
+		DebugMode:              false,
 	}
 }
 
@@ -242,8 +248,32 @@ func tickCmd() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// When on Features tab and not in filter/detail mode, pass messages to InteractiveFeatureList
+		// But always handle quit and tab switching globally
+		if m.ActiveTab == components.TabFeatures {
+			// Handle feature list key events when filtering or showing detail
+			if m.InteractiveFeatureList.IsFiltering() || m.InteractiveFeatureList.IsShowingDetail() {
+				// Let feature list handle these modes, but still allow quit
+				if msg.String() == "ctrl+c" {
+					if m.OnQuit != nil {
+						m.OnQuit()
+					}
+					return m, tea.Quit
+				}
+				var cmd tea.Cmd
+				m.InteractiveFeatureList, cmd = m.InteractiveFeatureList.Update(msg)
+				return m, cmd
+			}
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
+			// Don't quit if in filter mode on Features tab - q should close it
+			if m.ActiveTab == components.TabFeatures && m.InteractiveFeatureList.IsShowingDetail() {
+				var cmd tea.Cmd
+				m.InteractiveFeatureList, cmd = m.InteractiveFeatureList.Update(msg)
+				return m, cmd
+			}
 			if m.OnQuit != nil {
 				m.OnQuit()
 			}
@@ -287,6 +317,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.ActiveTab == components.TabLogs {
 				m.LogTab.ToggleAutoScroll()
 			}
+		default:
+			// Pass other key messages to InteractiveFeatureList when on Features tab
+			if m.ActiveTab == components.TabFeatures {
+				var cmd tea.Cmd
+				m.InteractiveFeatureList, cmd = m.InteractiveFeatureList.Update(msg)
+				return m, cmd
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -310,6 +347,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.LogTab.Resize(msg.Width-4, m.Height-8)
 		m.Dashboard.Width = mainColWidth
 		m.Dashboard.Height = m.Height - 10
+		m.InteractiveFeatureList.Resize(msg.Width-4, m.Height-10)
 
 	case TickMsg:
 		return m, tickCmd()
@@ -349,6 +387,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update feature list with current feature
 		if m.CurrentFeature != nil {
 			m.FeatureList.UpdateFromPRD(m.PRD, m.CurrentFeature.ID)
+			m.InteractiveFeatureList.SetPRD(m.PRD, m.CurrentFeature.ID)
 		}
 		// Sync with dashboard
 		m.Dashboard.SetIteration(msg.Iteration, m.MaxIterations)
@@ -368,12 +407,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PRDUpdateMsg:
 		m.PRD = msg.PRD
 		m.PRDStats = msg.Stats
-		// Update feature list
+		// Update feature lists
 		currentFeatureID := ""
 		if m.CurrentFeature != nil {
 			currentFeatureID = m.CurrentFeature.ID
 		}
 		m.FeatureList.UpdateFromPRD(m.PRD, currentFeatureID)
+		m.InteractiveFeatureList.SetPRD(m.PRD, currentFeatureID)
 		// Sync with dashboard
 		m.Dashboard.UpdateStats(msg.Stats)
 
@@ -561,15 +601,9 @@ func (m Model) renderDashboardTab() string {
 
 // renderFeaturesTab renders the features list view
 func (m Model) renderFeaturesTab() string {
-	var b strings.Builder
-
-	// Full-width feature list
-	m.FeatureList.Width = m.Width - 4
-	m.FeatureList.Height = m.Height - 12
-
-	b.WriteString(m.FeatureList.Render())
-
-	return b.String()
+	// Use the interactive feature list for full-featured navigation
+	m.InteractiveFeatureList.Resize(m.Width-4, m.Height-10)
+	return m.InteractiveFeatureList.View()
 }
 
 // renderLogsTab renders the dedicated logs view
@@ -718,11 +752,20 @@ func (m Model) renderHelp() string {
 	keys = append(keys, "[1-3/Tab] Switch tabs")
 
 	// Tab-specific help
-	if m.ActiveTab == components.TabLogs {
+	switch m.ActiveTab {
+	case components.TabLogs:
 		if m.LogTab.IsAutoScrollEnabled() {
 			keys = append(keys, "[a] Auto-scroll ON")
 		} else {
 			keys = append(keys, "[a] Auto-scroll OFF")
+		}
+	case components.TabFeatures:
+		if m.InteractiveFeatureList.IsFiltering() {
+			keys = append(keys, "[Enter] Apply filter", "[Esc] Cancel")
+		} else if m.InteractiveFeatureList.IsShowingDetail() {
+			keys = append(keys, "[Enter/Esc] Close detail")
+		} else {
+			keys = append(keys, "[j/k] Navigate", "[Enter] Details", "[/] Search")
 		}
 	}
 
