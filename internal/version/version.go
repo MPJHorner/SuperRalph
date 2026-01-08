@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -70,11 +71,45 @@ func IsNewer(release *GitHubRelease) bool {
 		return false
 	}
 
+	if Version == "dev" {
+		return false
+	}
+
 	current := strings.TrimPrefix(Version, "v")
 	latest := strings.TrimPrefix(release.TagName, "v")
 
-	// Simple comparison - works for semver
-	return latest > current && Version != "dev"
+	return compareSemver(latest, current) > 0
+}
+
+// compareSemver compares two semver strings, returning:
+// -1 if a < b, 0 if a == b, 1 if a > b
+func compareSemver(a, b string) int {
+	partsA := strings.Split(a, ".")
+	partsB := strings.Split(b, ".")
+
+	maxLen := len(partsA)
+	if len(partsB) > maxLen {
+		maxLen = len(partsB)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var numA, numB int
+		if i < len(partsA) {
+			numA, _ = strconv.Atoi(partsA[i])
+		}
+		if i < len(partsB) {
+			numB, _ = strconv.Atoi(partsB[i])
+		}
+
+		if numA > numB {
+			return 1
+		}
+		if numA < numB {
+			return -1
+		}
+	}
+
+	return 0
 }
 
 // GetUpdateMessage returns a message if an update is available

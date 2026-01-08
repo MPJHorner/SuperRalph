@@ -38,6 +38,41 @@ func TestShort(t *testing.T) {
 	}
 }
 
+func TestCompareSemver(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+		b    string
+		want int
+	}{
+		{"equal versions", "1.2.3", "1.2.3", 0},
+		{"a greater major", "2.0.0", "1.0.0", 1},
+		{"b greater major", "1.0.0", "2.0.0", -1},
+		{"a greater minor", "1.2.0", "1.1.0", 1},
+		{"b greater minor", "1.1.0", "1.2.0", -1},
+		{"a greater patch", "1.0.2", "1.0.1", 1},
+		{"b greater patch", "1.0.1", "1.0.2", -1},
+		// Critical: double-digit version comparison (the bug we fixed)
+		{"double digit patch a > b", "0.2.12", "0.2.9", 1},
+		{"double digit patch b > a", "0.2.9", "0.2.12", -1},
+		{"double digit minor", "0.12.0", "0.9.0", 1},
+		{"double digit major", "12.0.0", "9.0.0", 1},
+		// Edge cases
+		{"different lengths a longer", "1.2.3", "1.2", 1},
+		{"different lengths b longer", "1.2", "1.2.3", -1},
+		{"zeros", "0.0.0", "0.0.0", 0},
+		{"large numbers", "100.200.300", "100.200.299", 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := compareSemver(tt.a, tt.b); got != tt.want {
+				t.Errorf("compareSemver(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsNewer(t *testing.T) {
 	origVersion := Version
 	defer func() { Version = origVersion }()
@@ -82,6 +117,25 @@ func TestIsNewer(t *testing.T) {
 			name:       "major version newer",
 			current:    "v0.9.9",
 			releaseTag: "v1.0.0",
+			want:       true,
+		},
+		// Critical: the bug case - double digit versions
+		{
+			name:       "double digit patch newer",
+			current:    "v0.2.9",
+			releaseTag: "v0.2.12",
+			want:       true,
+		},
+		{
+			name:       "double digit patch older",
+			current:    "v0.2.12",
+			releaseTag: "v0.2.9",
+			want:       false,
+		},
+		{
+			name:       "double digit minor newer",
+			current:    "v0.9.0",
+			releaseTag: "v0.12.0",
 			want:       true,
 		},
 	}
