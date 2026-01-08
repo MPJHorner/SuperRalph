@@ -13,11 +13,56 @@ permissions:
 
 jobs:
   # ============================================
+  # LINT - Run golangci-lint
+  # ============================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+  # ============================================
+  # SECURITY - Run govulncheck
+  # ============================================
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  # ============================================
   # TEST - Run tests and publish results
   # ============================================
   test:
     name: Test
     runs-on: ubuntu-latest
+    needs: [lint]
     outputs:
       tests_passed: ${{ steps.test.outcome == 'success' }}
     steps:
@@ -29,17 +74,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.24'
+          cache: true
 
       - name: Download dependencies
         run: go mod download
 
-      - name: Run tests
+      - name: Run tests with coverage
         id: test
         run: |
-          go test -v ./... -json > test-results.json 2>&1 || true
-          go test -v ./... 2>&1 | go-junit-report -set-exit-code > test-results.xml || true
-          go test -v ./...
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Install go-junit-report
         if: always()
@@ -64,7 +108,17 @@ jobs:
         if: always()
         with:
           name: test-results
-          path: test-results.xml
+          path: |
+            test-results.xml
+            coverage.out
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: coverage.out
+          fail_ci_if_error: false
+        continue-on-error: true
 
   # ============================================
   # TAG - Bump version (only on main, after tests pass)
@@ -72,7 +126,7 @@ jobs:
   tag:
     name: Tag Version
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, security]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     outputs:
       new_tag: ${{ steps.tag_version.outputs.new_tag }}
@@ -123,7 +177,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.24'
+          cache: true
 
       - name: Get version info
         id: version

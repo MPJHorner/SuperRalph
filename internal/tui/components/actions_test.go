@@ -1,31 +1,21 @@
 package components
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewActionPanel(t *testing.T) {
 	p := NewActionPanel(80, 10)
 
-	if p == nil {
-		t.Fatal("NewActionPanel returned nil")
-	}
-	if p.Width != 80 {
-		t.Errorf("Expected width 80, got %d", p.Width)
-	}
-	if p.Height != 10 {
-		t.Errorf("Expected height 10, got %d", p.Height)
-	}
-	if len(p.Actions) != 0 {
-		t.Errorf("Expected empty actions, got %d", len(p.Actions))
-	}
-	if p.MaxActions != 10 {
-		t.Errorf("Expected MaxActions 10, got %d", p.MaxActions)
-	}
-	if p.Title != "Actions" {
-		t.Errorf("Expected title 'Actions', got %q", p.Title)
-	}
+	require.NotNil(t, p, "NewActionPanel returned nil")
+	assert.Equal(t, 80, p.Width)
+	assert.Equal(t, 10, p.Height)
+	assert.Len(t, p.Actions, 0)
+	assert.Equal(t, 10, p.MaxActions)
+	assert.Equal(t, "Actions", p.Title)
 }
 
 func TestActionPanelAddAction(t *testing.T) {
@@ -40,12 +30,8 @@ func TestActionPanelAddAction(t *testing.T) {
 
 	p.AddAction(action)
 
-	if len(p.Actions) != 1 {
-		t.Errorf("Expected 1 action, got %d", len(p.Actions))
-	}
-	if p.Actions[0].ID != "action-1" {
-		t.Errorf("Expected action ID 'action-1', got %q", p.Actions[0].ID)
-	}
+	require.Len(t, p.Actions, 1)
+	assert.Equal(t, "action-1", p.Actions[0].ID)
 }
 
 func TestActionPanelMaxActions(t *testing.T) {
@@ -61,16 +47,12 @@ func TestActionPanelMaxActions(t *testing.T) {
 		})
 	}
 
-	if len(p.Actions) != 3 {
-		t.Errorf("Expected 3 actions (max), got %d", len(p.Actions))
-	}
+	require.Len(t, p.Actions, 3)
 
 	// Should keep the last 3 actions
 	expectedIDs := []string{"c", "d", "e"}
 	for i, expected := range expectedIDs {
-		if p.Actions[i].ID != expected {
-			t.Errorf("Expected action[%d].ID to be %q, got %q", i, expected, p.Actions[i].ID)
-		}
+		assert.Equal(t, expected, p.Actions[i].ID, "action[%d].ID", i)
 	}
 }
 
@@ -86,12 +68,8 @@ func TestActionPanelUpdateAction(t *testing.T) {
 
 	p.UpdateAction("action-1", StatusDone, "All tests passed")
 
-	if p.Actions[0].Status != StatusDone {
-		t.Errorf("Expected status StatusDone, got %s", p.Actions[0].Status)
-	}
-	if p.Actions[0].Output != "All tests passed" {
-		t.Errorf("Expected output 'All tests passed', got %q", p.Actions[0].Output)
-	}
+	assert.Equal(t, StatusDone, p.Actions[0].Status)
+	assert.Equal(t, "All tests passed", p.Actions[0].Output)
 }
 
 func TestActionPanelUpdateActionNotFound(t *testing.T) {
@@ -106,9 +84,7 @@ func TestActionPanelUpdateActionNotFound(t *testing.T) {
 	p.UpdateAction("non-existent", StatusDone, "output")
 
 	// Original action should be unchanged
-	if p.Actions[0].Status != StatusPending {
-		t.Errorf("Original action should be unchanged")
-	}
+	assert.Equal(t, StatusPending, p.Actions[0].Status, "Original action should be unchanged")
 }
 
 func TestActionPanelClear(t *testing.T) {
@@ -119,9 +95,7 @@ func TestActionPanelClear(t *testing.T) {
 
 	p.Clear()
 
-	if len(p.Actions) != 0 {
-		t.Errorf("Expected 0 actions after clear, got %d", len(p.Actions))
-	}
+	assert.Len(t, p.Actions, 0, "Expected 0 actions after clear")
 }
 
 func TestActionPanelGetPendingCount(t *testing.T) {
@@ -133,9 +107,7 @@ func TestActionPanelGetPendingCount(t *testing.T) {
 	p.AddAction(ActionItem{ID: "4", Status: StatusDone})
 
 	count := p.GetPendingCount()
-	if count != 2 {
-		t.Errorf("Expected 2 pending, got %d", count)
-	}
+	assert.Equal(t, 2, count, "Expected 2 pending")
 }
 
 func TestActionPanelGetRunningCount(t *testing.T) {
@@ -147,9 +119,7 @@ func TestActionPanelGetRunningCount(t *testing.T) {
 	p.AddAction(ActionItem{ID: "4", Status: StatusDone})
 
 	count := p.GetRunningCount()
-	if count != 2 {
-		t.Errorf("Expected 2 running, got %d", count)
-	}
+	assert.Equal(t, 2, count, "Expected 2 running")
 }
 
 func TestStatusIcon(t *testing.T) {
@@ -167,9 +137,7 @@ func TestStatusIcon(t *testing.T) {
 
 	for _, tc := range testCases {
 		result := statusIcon(tc.status)
-		if result != tc.expected {
-			t.Errorf("statusIcon(%s) expected %q, got %q", tc.status, tc.expected, result)
-		}
+		assert.Equal(t, tc.expected, result, "statusIcon(%s)", tc.status)
 	}
 }
 
@@ -192,9 +160,7 @@ func TestTypeIcon(t *testing.T) {
 
 	for _, tc := range testCases {
 		result := typeIcon(tc.actionType)
-		if result != tc.expected {
-			t.Errorf("typeIcon(%s) expected %q, got %q", tc.actionType, tc.expected, result)
-		}
+		assert.Equal(t, tc.expected, result, "typeIcon(%s)", tc.actionType)
 	}
 }
 
@@ -202,9 +168,7 @@ func TestActionPanelRenderEmpty(t *testing.T) {
 	p := NewActionPanel(80, 10)
 
 	result := p.Render()
-	if result != "" {
-		t.Errorf("Expected empty render for empty panel, got %q", result)
-	}
+	assert.Equal(t, "", result, "Expected empty render for empty panel")
 }
 
 func TestActionPanelRenderWithActions(t *testing.T) {
@@ -226,26 +190,18 @@ func TestActionPanelRenderWithActions(t *testing.T) {
 	result := p.Render()
 
 	// Should contain title
-	if !strings.Contains(result, "Actions") {
-		t.Error("Render should contain title")
-	}
+	assert.Contains(t, result, "Actions", "Render should contain title")
 
 	// Should contain descriptions
-	if !strings.Contains(result, "Reading main.go") {
-		t.Error("Render should contain first action description")
-	}
-	if !strings.Contains(result, "Running tests") {
-		t.Error("Render should contain second action description")
-	}
+	assert.Contains(t, result, "Reading main.go", "Render should contain first action description")
+	assert.Contains(t, result, "Running tests", "Render should contain second action description")
 }
 
 func TestActionPanelSummary(t *testing.T) {
 	p := NewActionPanel(80, 10)
 
 	// Empty panel
-	if p.Summary() != "" {
-		t.Error("Empty panel should have empty summary")
-	}
+	assert.Equal(t, "", p.Summary(), "Empty panel should have empty summary")
 
 	p.AddAction(ActionItem{ID: "1", Status: StatusPending})
 	p.AddAction(ActionItem{ID: "2", Status: StatusRunning})
@@ -255,35 +211,17 @@ func TestActionPanelSummary(t *testing.T) {
 
 	summary := p.Summary()
 
-	if !strings.Contains(summary, "2 running") {
-		t.Errorf("Summary should contain '2 running', got %q", summary)
-	}
-	if !strings.Contains(summary, "1 pending") {
-		t.Errorf("Summary should contain '1 pending', got %q", summary)
-	}
-	if !strings.Contains(summary, "1 done") {
-		t.Errorf("Summary should contain '1 done', got %q", summary)
-	}
-	if !strings.Contains(summary, "1 failed") {
-		t.Errorf("Summary should contain '1 failed', got %q", summary)
-	}
+	assert.Contains(t, summary, "2 running")
+	assert.Contains(t, summary, "1 pending")
+	assert.Contains(t, summary, "1 done")
+	assert.Contains(t, summary, "1 failed")
 }
 
 func TestActionStatusConstants(t *testing.T) {
 	// Verify status constants have expected values
-	if StatusPending != "pending" {
-		t.Errorf("StatusPending expected 'pending', got %q", StatusPending)
-	}
-	if StatusRunning != "running" {
-		t.Errorf("StatusRunning expected 'running', got %q", StatusRunning)
-	}
-	if StatusDone != "done" {
-		t.Errorf("StatusDone expected 'done', got %q", StatusDone)
-	}
-	if StatusFailed != "failed" {
-		t.Errorf("StatusFailed expected 'failed', got %q", StatusFailed)
-	}
-	if StatusSkipped != "skipped" {
-		t.Errorf("StatusSkipped expected 'skipped', got %q", StatusSkipped)
-	}
+	assert.Equal(t, ActionStatus("pending"), StatusPending)
+	assert.Equal(t, ActionStatus("running"), StatusRunning)
+	assert.Equal(t, ActionStatus("done"), StatusDone)
+	assert.Equal(t, ActionStatus("failed"), StatusFailed)
+	assert.Equal(t, ActionStatus("skipped"), StatusSkipped)
 }

@@ -8,41 +8,30 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDefaultParallelLimits(t *testing.T) {
 	limits := DefaultParallelLimits()
-	if limits.MaxReads != 10 {
-		t.Errorf("Expected MaxReads=10, got %d", limits.MaxReads)
-	}
-	if limits.MaxCommands != 3 {
-		t.Errorf("Expected MaxCommands=3, got %d", limits.MaxCommands)
-	}
+	assert.Equal(t, 10, limits.MaxReads)
+	assert.Equal(t, 3, limits.MaxCommands)
 }
 
 func TestNewParallelExecutor(t *testing.T) {
 	pe := NewParallelExecutor("/tmp/test")
-	if pe == nil {
-		t.Fatal("Expected non-nil executor")
-	}
-	if pe.workDir != "/tmp/test" {
-		t.Errorf("Expected workDir=/tmp/test, got %s", pe.workDir)
-	}
-	if pe.limits.MaxReads != 10 {
-		t.Errorf("Expected default MaxReads=10, got %d", pe.limits.MaxReads)
-	}
+	require.NotNil(t, pe)
+	assert.Equal(t, "/tmp/test", pe.workDir)
+	assert.Equal(t, 10, pe.limits.MaxReads)
 }
 
 func TestParallelExecutorSetLimits(t *testing.T) {
 	pe := NewParallelExecutor("/tmp/test")
 	pe.SetLimits(ParallelLimits{MaxReads: 5, MaxCommands: 2})
 
-	if pe.limits.MaxReads != 5 {
-		t.Errorf("Expected MaxReads=5, got %d", pe.limits.MaxReads)
-	}
-	if pe.limits.MaxCommands != 2 {
-		t.Errorf("Expected MaxCommands=2, got %d", pe.limits.MaxCommands)
-	}
+	assert.Equal(t, 5, pe.limits.MaxReads)
+	assert.Equal(t, 2, pe.limits.MaxCommands)
 }
 
 func TestParallelExecutorSetDebug(t *testing.T) {
@@ -52,40 +41,29 @@ func TestParallelExecutorSetDebug(t *testing.T) {
 		debugMsgs = append(debugMsgs, msg)
 	})
 
-	if !pe.debug {
-		t.Error("Expected debug=true")
-	}
+	assert.True(t, pe.debug)
 	pe.debugLog("test message")
-	if len(debugMsgs) != 1 {
-		t.Errorf("Expected 1 debug message, got %d", len(debugMsgs))
-	}
+	assert.Len(t, debugMsgs, 1)
 }
 
 func TestExecuteEmpty(t *testing.T) {
 	pe := NewParallelExecutor("/tmp/test")
 	result := pe.Execute(context.Background(), ParallelAction{})
 
-	if !result.AllSucceeded {
-		t.Error("Empty parallel action should succeed")
-	}
-	if len(result.Results) != 0 {
-		t.Errorf("Expected 0 results, got %d", len(result.Results))
-	}
+	assert.True(t, result.AllSucceeded)
+	assert.Len(t, result.Results, 0)
 }
 
 func TestExecuteParallelReads(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create test files
 	for i := 1; i <= 5; i++ {
 		filename := filepath.Join(tmpDir, "file"+string(rune('0'+i))+".txt")
-		if err := os.WriteFile(filename, []byte("content "+string(rune('0'+i))), 0644); err != nil {
-			t.Fatalf("Failed to write file: %v", err)
-		}
+		err := os.WriteFile(filename, []byte("content "+string(rune('0'+i))), 0644)
+		require.NoError(t, err)
 	}
 
 	pe := NewParallelExecutor(tmpDir)
@@ -103,33 +81,21 @@ func TestExecuteParallelReads(t *testing.T) {
 
 	result := pe.Execute(context.Background(), ParallelAction{Actions: actions})
 
-	if !result.AllSucceeded {
-		t.Errorf("Expected all reads to succeed, got %d failures", result.FailedCount)
-		for _, r := range result.Results {
-			if !r.Success {
-				t.Logf("Failed: %s - %s", r.Action.Params.Paths, r.Error)
-			}
-		}
-	}
-	if len(result.Results) != 5 {
-		t.Errorf("Expected 5 results, got %d", len(result.Results))
-	}
+	assert.True(t, result.AllSucceeded)
+	assert.Len(t, result.Results, 5)
 }
 
 func TestExecuteParallelReadsWithLimit(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-limit-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create many test files
 	numFiles := 20
 	for i := 1; i <= numFiles; i++ {
 		filename := filepath.Join(tmpDir, "file"+string(rune('a'-1+i))+".txt")
-		if err := os.WriteFile(filename, []byte("content"), 0644); err != nil {
-			t.Fatalf("Failed to write file: %v", err)
-		}
+		err := os.WriteFile(filename, []byte("content"), 0644)
+		require.NoError(t, err)
 	}
 
 	pe := NewParallelExecutor(tmpDir)
@@ -147,19 +113,13 @@ func TestExecuteParallelReadsWithLimit(t *testing.T) {
 
 	result := pe.Execute(context.Background(), ParallelAction{Actions: actions})
 
-	if !result.AllSucceeded {
-		t.Errorf("Expected all reads to succeed, got %d failures", result.FailedCount)
-	}
-	if len(result.Results) != numFiles {
-		t.Errorf("Expected %d results, got %d", numFiles, len(result.Results))
-	}
+	assert.True(t, result.AllSucceeded)
+	assert.Len(t, result.Results, numFiles)
 }
 
 func TestExecuteParallelCommands(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-cmd-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	pe := NewParallelExecutor(tmpDir)
@@ -172,31 +132,19 @@ func TestExecuteParallelCommands(t *testing.T) {
 
 	result := pe.Execute(context.Background(), ParallelAction{Actions: actions})
 
-	if !result.AllSucceeded {
-		t.Errorf("Expected all commands to succeed, got %d failures", result.FailedCount)
-		for _, r := range result.Results {
-			if !r.Success {
-				t.Logf("Failed: %s - %s", r.Action.Params.Command, r.Error)
-			}
-		}
-	}
-	if len(result.Results) != 3 {
-		t.Errorf("Expected 3 results, got %d", len(result.Results))
-	}
+	assert.True(t, result.AllSucceeded)
+	assert.Len(t, result.Results, 3)
 
 	// Check outputs contain expected content
 	for _, r := range result.Results {
-		if !strings.Contains(r.Output, "hello") && !strings.Contains(r.Output, "world") && !strings.Contains(r.Output, "test") {
-			t.Errorf("Unexpected output: %s", r.Output)
-		}
+		hasExpectedContent := strings.Contains(r.Output, "hello") || strings.Contains(r.Output, "world") || strings.Contains(r.Output, "test")
+		assert.True(t, hasExpectedContent, "Unexpected output: %s", r.Output)
 	}
 }
 
 func TestExecuteSequentialWrites(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-write-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	pe := NewParallelExecutor(tmpDir)
@@ -210,36 +158,26 @@ func TestExecuteSequentialWrites(t *testing.T) {
 
 	result := pe.Execute(context.Background(), ParallelAction{Actions: actions})
 
-	if !result.AllSucceeded {
-		t.Errorf("Expected all writes to succeed, got %d failures", result.FailedCount)
-	}
+	assert.True(t, result.AllSucceeded)
 
 	// Verify files were written
 	for i := 1; i <= 3; i++ {
 		filename := filepath.Join(tmpDir, "file"+string(rune('0'+i))+".txt")
 		content, err := os.ReadFile(filename)
-		if err != nil {
-			t.Errorf("Failed to read %s: %v", filename, err)
-			continue
-		}
+		require.NoError(t, err)
 		expected := "content" + string(rune('0'+i))
-		if string(content) != expected {
-			t.Errorf("Expected %s, got %s", expected, string(content))
-		}
+		assert.Equal(t, expected, string(content))
 	}
 }
 
 func TestExecuteMixedActions(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-mixed-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create an initial file to read
-	if err := os.WriteFile(filepath.Join(tmpDir, "existing.txt"), []byte("existing content"), 0644); err != nil {
-		t.Fatalf("Failed to write file: %v", err)
-	}
+	err = os.WriteFile(filepath.Join(tmpDir, "existing.txt"), []byte("existing content"), 0644)
+	require.NoError(t, err)
 
 	pe := NewParallelExecutor(tmpDir)
 
@@ -252,30 +190,18 @@ func TestExecuteMixedActions(t *testing.T) {
 
 	result := pe.Execute(context.Background(), ParallelAction{Actions: actions})
 
-	if !result.AllSucceeded {
-		t.Errorf("Expected all actions to succeed, got %d failures", result.FailedCount)
-		for _, r := range result.Results {
-			if !r.Success {
-				t.Logf("Failed: %v - %s", r.Action.Type, r.Error)
-			}
-		}
-	}
-	if len(result.Results) != 4 {
-		t.Errorf("Expected 4 results, got %d", len(result.Results))
-	}
+	assert.True(t, result.AllSucceeded)
+	assert.Len(t, result.Results, 4)
 }
 
 func TestExecutePartialFailure(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-fail-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create one file but not the other
-	if err := os.WriteFile(filepath.Join(tmpDir, "exists.txt"), []byte("content"), 0644); err != nil {
-		t.Fatalf("Failed to write file: %v", err)
-	}
+	err = os.WriteFile(filepath.Join(tmpDir, "exists.txt"), []byte("content"), 0644)
+	require.NoError(t, err)
 
 	pe := NewParallelExecutor(tmpDir)
 
@@ -286,12 +212,8 @@ func TestExecutePartialFailure(t *testing.T) {
 
 	result := pe.Execute(context.Background(), ParallelAction{Actions: actions})
 
-	if result.AllSucceeded {
-		t.Error("Expected partial failure")
-	}
-	if result.FailedCount != 1 {
-		t.Errorf("Expected 1 failure, got %d", result.FailedCount)
-	}
+	assert.False(t, result.AllSucceeded)
+	assert.Equal(t, 1, result.FailedCount)
 
 	// Check that we have both success and failure
 	var successCount, failCount int
@@ -300,21 +222,16 @@ func TestExecutePartialFailure(t *testing.T) {
 			successCount++
 		} else {
 			failCount++
-			if !strings.Contains(r.Error, "nonexistent") {
-				t.Errorf("Expected error to mention nonexistent file, got: %s", r.Error)
-			}
+			assert.Contains(t, r.Error, "nonexistent")
 		}
 	}
-	if successCount != 1 || failCount != 1 {
-		t.Errorf("Expected 1 success and 1 failure, got %d/%d", successCount, failCount)
-	}
+	assert.Equal(t, 1, successCount)
+	assert.Equal(t, 1, failCount)
 }
 
 func TestExecuteContextCancellation(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-cancel-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	pe := NewParallelExecutor(tmpDir)
@@ -329,134 +246,94 @@ func TestExecuteContextCancellation(t *testing.T) {
 
 	result := pe.Execute(ctx, ParallelAction{Actions: actions})
 
-	if result.AllSucceeded {
-		t.Error("Expected failure due to context cancellation")
-	}
-	if result.FailedCount != 1 {
-		t.Errorf("Expected 1 failure, got %d", result.FailedCount)
-	}
+	assert.False(t, result.AllSucceeded)
+	assert.Equal(t, 1, result.FailedCount)
 }
 
 func TestExecuteSingleRead(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-single-read-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	testContent := "test content for single read"
-	if err := os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(testContent), 0644); err != nil {
-		t.Fatalf("Failed to write file: %v", err)
-	}
+	err = os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(testContent), 0644)
+	require.NoError(t, err)
 
 	pe := NewParallelExecutor(tmpDir)
 
 	output, err := pe.ExecuteSingleRead(context.Background(), "test.txt")
-	if err != nil {
-		t.Fatalf("ExecuteSingleRead failed: %v", err)
-	}
-	if !strings.Contains(output, testContent) {
-		t.Errorf("Expected output to contain %q, got %q", testContent, output)
-	}
+	require.NoError(t, err)
+	assert.Contains(t, output, testContent)
 }
 
 func TestExecuteSingleReadMissing(t *testing.T) {
 	pe := NewParallelExecutor("/tmp")
 	_, err := pe.ExecuteSingleRead(context.Background(), "nonexistent-file-12345.txt")
-	if err == nil {
-		t.Error("Expected error for missing file")
-	}
+	require.Error(t, err)
 }
 
 func TestExecuteSingleWrite(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-single-write-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	pe := NewParallelExecutor(tmpDir)
 
 	testContent := "test content for single write"
 	err = pe.ExecuteSingleWrite(context.Background(), "output.txt", testContent)
-	if err != nil {
-		t.Fatalf("ExecuteSingleWrite failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Verify file was written
 	content, err := os.ReadFile(filepath.Join(tmpDir, "output.txt"))
-	if err != nil {
-		t.Fatalf("Failed to read written file: %v", err)
-	}
-	if string(content) != testContent {
-		t.Errorf("Expected %q, got %q", testContent, string(content))
-	}
+	require.NoError(t, err)
+	assert.Equal(t, testContent, string(content))
 }
 
 func TestExecuteSingleWriteNestedDir(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-nested-write-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	pe := NewParallelExecutor(tmpDir)
 
 	// Write to a nested path that doesn't exist
 	err = pe.ExecuteSingleWrite(context.Background(), "a/b/c/file.txt", "nested content")
-	if err != nil {
-		t.Fatalf("ExecuteSingleWrite to nested dir failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Verify file was written
 	content, err := os.ReadFile(filepath.Join(tmpDir, "a", "b", "c", "file.txt"))
-	if err != nil {
-		t.Fatalf("Failed to read written file: %v", err)
-	}
-	if string(content) != "nested content" {
-		t.Errorf("Expected 'nested content', got %q", string(content))
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "nested content", string(content))
 }
 
 func TestExecuteSingleCommand(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-single-cmd-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	pe := NewParallelExecutor(tmpDir)
 
 	output, err := pe.ExecuteSingleCommand(context.Background(), "echo 'hello world'")
-	if err != nil {
-		t.Fatalf("ExecuteSingleCommand failed: %v", err)
-	}
-	if !strings.Contains(output, "hello world") {
-		t.Errorf("Expected output to contain 'hello world', got %q", output)
-	}
+	require.NoError(t, err)
+	assert.Contains(t, output, "hello world")
 }
 
 func TestExecuteSingleCommandFail(t *testing.T) {
 	pe := NewParallelExecutor("/tmp")
 	_, err := pe.ExecuteSingleCommand(context.Background(), "false") // 'false' command always exits with 1
-	if err == nil {
-		t.Error("Expected error for failed command")
-	}
+	require.Error(t, err)
 }
 
 func TestParallelActionsPreserveOrder(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-order-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create test files
 	for i := 1; i <= 5; i++ {
 		filename := filepath.Join(tmpDir, "file"+string(rune('0'+i))+".txt")
-		if err := os.WriteFile(filename, []byte("content"+string(rune('0'+i))), 0644); err != nil {
-			t.Fatalf("Failed to write file: %v", err)
-		}
+		err := os.WriteFile(filename, []byte("content"+string(rune('0'+i))), 0644)
+		require.NoError(t, err)
 	}
 
 	pe := NewParallelExecutor(tmpDir)
@@ -473,24 +350,19 @@ func TestParallelActionsPreserveOrder(t *testing.T) {
 
 	result := pe.Execute(context.Background(), ParallelAction{Actions: actions})
 
-	if !result.AllSucceeded {
-		t.Fatalf("Expected all reads to succeed")
-	}
+	require.True(t, result.AllSucceeded)
 
 	// Results should preserve order
 	for i, r := range result.Results {
 		expectedPath := "file" + string(rune('0'+i+1)) + ".txt"
-		if len(r.Action.Params.Paths) == 0 || r.Action.Params.Paths[0] != expectedPath {
-			t.Errorf("Result %d: expected path %s, got %v", i, expectedPath, r.Action.Params.Paths)
-		}
+		require.NotEmpty(t, r.Action.Params.Paths)
+		assert.Equal(t, expectedPath, r.Action.Params.Paths[0])
 	}
 }
 
 func TestConcurrencyLimit(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-concurrency-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	pe := NewParallelExecutor(tmpDir)
@@ -515,9 +387,7 @@ func TestConcurrencyLimit(t *testing.T) {
 	result := pe.Execute(context.Background(), ParallelAction{Actions: actions})
 	elapsed := time.Since(start)
 
-	if !result.AllSucceeded {
-		t.Errorf("Expected all commands to succeed, got %d failures", result.FailedCount)
-	}
+	assert.True(t, result.AllSucceeded)
 
 	// With MaxCommands=2 and 4 commands of ~100ms each, it should take at least 200ms
 	// (two batches of 2 parallel commands)
@@ -531,9 +401,7 @@ func TestConcurrencyLimit(t *testing.T) {
 
 func TestActionParallelConstant(t *testing.T) {
 	// Verify the ActionParallel constant is properly defined
-	if ActionParallel != "parallel" {
-		t.Errorf("Expected ActionParallel='parallel', got %q", ActionParallel)
-	}
+	assert.Equal(t, Action("parallel"), ActionParallel)
 
 	// Verify it's distinct from other actions
 	validActions := map[Action]bool{
@@ -545,9 +413,7 @@ func TestActionParallelConstant(t *testing.T) {
 		ActionParallel:   true,
 	}
 
-	if !validActions[ActionParallel] {
-		t.Error("ActionParallel should be in valid actions")
-	}
+	assert.True(t, validActions[ActionParallel])
 }
 
 func TestReadEmptyPaths(t *testing.T) {
@@ -557,12 +423,8 @@ func TestReadEmptyPaths(t *testing.T) {
 		Params: ActionParams{Paths: []string{}},
 	})
 
-	if result.Success {
-		t.Error("Expected failure for empty paths")
-	}
-	if !strings.Contains(result.Error, "no file paths") {
-		t.Errorf("Expected 'no file paths' error, got: %s", result.Error)
-	}
+	assert.False(t, result.Success)
+	assert.Contains(t, result.Error, "no file paths")
 }
 
 func TestWriteEmptyPath(t *testing.T) {
@@ -572,12 +434,8 @@ func TestWriteEmptyPath(t *testing.T) {
 		Params: ActionParams{Path: "", Content: "test"},
 	})
 
-	if result.Success {
-		t.Error("Expected failure for empty path")
-	}
-	if !strings.Contains(result.Error, "no file path") {
-		t.Errorf("Expected 'no file path' error, got: %s", result.Error)
-	}
+	assert.False(t, result.Success)
+	assert.Contains(t, result.Error, "no file path")
 }
 
 func TestCommandEmptyCommand(t *testing.T) {
@@ -587,12 +445,8 @@ func TestCommandEmptyCommand(t *testing.T) {
 		Params: ActionParams{Command: ""},
 	})
 
-	if result.Success {
-		t.Error("Expected failure for empty command")
-	}
-	if !strings.Contains(result.Error, "no command") {
-		t.Errorf("Expected 'no command' error, got: %s", result.Error)
-	}
+	assert.False(t, result.Success)
+	assert.Contains(t, result.Error, "no command")
 }
 
 func TestExecuteOtherUnsupported(t *testing.T) {
@@ -602,19 +456,13 @@ func TestExecuteOtherUnsupported(t *testing.T) {
 		Params: ActionParams{},
 	})
 
-	if result.Success {
-		t.Error("Expected failure for unsupported action type")
-	}
-	if !strings.Contains(result.Error, "unsupported action type") {
-		t.Errorf("Expected 'unsupported action type' error, got: %s", result.Error)
-	}
+	assert.False(t, result.Success)
+	assert.Contains(t, result.Error, "unsupported action type")
 }
 
 func TestReadMultipleFilesInSingleAction(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-multi-read-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create test files
@@ -632,27 +480,17 @@ func TestReadMultipleFilesInSingleAction(t *testing.T) {
 		},
 	})
 
-	if !result.Success {
-		t.Fatalf("Expected success, got error: %s", result.Error)
-	}
+	require.True(t, result.Success)
 
 	// Output should contain all three file contents
-	if !strings.Contains(result.Output, "content A") {
-		t.Error("Expected output to contain 'content A'")
-	}
-	if !strings.Contains(result.Output, "content B") {
-		t.Error("Expected output to contain 'content B'")
-	}
-	if !strings.Contains(result.Output, "content C") {
-		t.Error("Expected output to contain 'content C'")
-	}
+	assert.Contains(t, result.Output, "content A")
+	assert.Contains(t, result.Output, "content B")
+	assert.Contains(t, result.Output, "content C")
 }
 
 func TestReadMultipleFilesPartialFailure(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "parallel-multi-read-fail-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create only some files
@@ -668,12 +506,8 @@ func TestReadMultipleFilesPartialFailure(t *testing.T) {
 		},
 	})
 
-	if result.Success {
-		t.Error("Expected failure when any file is missing")
-	}
-	if !strings.Contains(result.Error, "missing.txt") {
-		t.Errorf("Expected error to mention missing file, got: %s", result.Error)
-	}
+	assert.False(t, result.Success)
+	assert.Contains(t, result.Error, "missing.txt")
 }
 
 func TestParallelResultSerialization(t *testing.T) {
@@ -696,23 +530,13 @@ func TestParallelResultSerialization(t *testing.T) {
 
 	// Test that it can be serialized to JSON
 	data, err := json.Marshal(result)
-	if err != nil {
-		t.Fatalf("Failed to marshal: %v", err)
-	}
+	require.NoError(t, err)
 
 	var restored ParallelResult
-	if err := json.Unmarshal(data, &restored); err != nil {
-		t.Fatalf("Failed to unmarshal: %v", err)
-	}
+	err = json.Unmarshal(data, &restored)
+	require.NoError(t, err)
 
-	if restored.AllSucceeded != result.AllSucceeded {
-		t.Error("AllSucceeded not preserved")
-	}
-	if restored.FailedCount != result.FailedCount {
-		t.Error("FailedCount not preserved")
-	}
-	if len(restored.Results) != len(result.Results) {
-		t.Error("Results count not preserved")
-	}
+	assert.Equal(t, result.AllSucceeded, restored.AllSucceeded)
+	assert.Equal(t, result.FailedCount, restored.FailedCount)
+	assert.Len(t, restored.Results, len(result.Results))
 }
-

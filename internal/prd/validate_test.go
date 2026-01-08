@@ -2,6 +2,8 @@ package prd
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestValidate(t *testing.T) {
@@ -205,16 +207,8 @@ func TestValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := Validate(tt.prd)
 
-			if result.Valid != tt.wantValid {
-				t.Errorf("Validate().Valid = %v, want %v", result.Valid, tt.wantValid)
-			}
-
-			if len(result.Errors) != tt.wantErrors {
-				t.Errorf("Validate() returned %d errors, want %d", len(result.Errors), tt.wantErrors)
-				for _, err := range result.Errors {
-					t.Logf("  - %s", err.Error())
-				}
-			}
+			assert.Equal(t, tt.wantValid, result.Valid)
+			assert.Len(t, result.Errors, tt.wantErrors)
 		})
 	}
 }
@@ -236,9 +230,7 @@ func TestValidationErrorString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
-			if got := tt.err.Error(); got != tt.want {
-				t.Errorf("ValidationError.Error() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.err.Error())
 		})
 	}
 }
@@ -406,16 +398,8 @@ func TestValidateDependsOn(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := Validate(tt.prd)
 
-			if result.Valid != tt.wantValid {
-				t.Errorf("Validate().Valid = %v, want %v", result.Valid, tt.wantValid)
-			}
-
-			if len(result.Errors) != tt.wantErrors {
-				t.Errorf("Validate() returned %d errors, want %d", len(result.Errors), tt.wantErrors)
-				for _, err := range result.Errors {
-					t.Logf("  - %s", err.Error())
-				}
-			}
+			assert.Equal(t, tt.wantValid, result.Valid)
+			assert.Len(t, result.Errors, tt.wantErrors)
 		})
 	}
 }

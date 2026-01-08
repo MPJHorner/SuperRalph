@@ -3,17 +3,17 @@ package progress
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWriterAppend(t *testing.T) {
 	// Create a temp directory
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	writer := NewWriter(tmpDir)
@@ -58,20 +58,14 @@ func TestWriterAppend(t *testing.T) {
 
 	// Append entry
 	err = writer.Append(entry)
-	if err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	// Verify file exists
-	if !writer.Exists() {
-		t.Error("Exists() = false after Append()")
-	}
+	assert.True(t, writer.Exists())
 
 	// Read the file content
 	content, err := Read(writer.Path())
-	if err != nil {
-		t.Fatalf("Read() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	// Verify content contains expected parts
 	expectedParts := []string{
@@ -90,18 +84,14 @@ func TestWriterAppend(t *testing.T) {
 	}
 
 	for _, part := range expectedParts {
-		if !strings.Contains(content, part) {
-			t.Errorf("Content missing expected part: %q", part)
-		}
+		assert.Contains(t, content, part)
 	}
 }
 
 func TestWriterAppendMultiple(t *testing.T) {
 	// Create a temp directory
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	writer := NewWriter(tmpDir)
@@ -121,9 +111,7 @@ func TestWriterAppendMultiple(t *testing.T) {
 	}
 
 	err = writer.Append(entry1)
-	if err != nil {
-		t.Fatalf("Append(entry1) error = %v", err)
-	}
+	require.NoError(t, err)
 
 	// Append second entry
 	entry2 := Entry{
@@ -140,64 +128,41 @@ func TestWriterAppendMultiple(t *testing.T) {
 	}
 
 	err = writer.Append(entry2)
-	if err != nil {
-		t.Fatalf("Append(entry2) error = %v", err)
-	}
+	require.NoError(t, err)
 
 	// Read and verify both iterations are present
 	content, err := Read(writer.Path())
-	if err != nil {
-		t.Fatalf("Read() error = %v", err)
-	}
+	require.NoError(t, err)
 
-	if !strings.Contains(content, "Iteration: 1") {
-		t.Error("Content missing Iteration: 1")
-	}
-	if !strings.Contains(content, "Iteration: 2") {
-		t.Error("Content missing Iteration: 2")
-	}
+	assert.Contains(t, content, "Iteration: 1")
+	assert.Contains(t, content, "Iteration: 2")
 }
 
 func TestGetPath(t *testing.T) {
 	path := GetPath("/some/dir")
-	expected := "/some/dir/progress.txt"
-	if path != expected {
-		t.Errorf("GetPath() = %q, want %q", path, expected)
-	}
+	assert.Equal(t, "/some/dir/progress.txt", path)
 }
 
 func TestExistsInDir(t *testing.T) {
 	// Create a temp directory
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Should not exist initially
-	if ExistsInDir(tmpDir) {
-		t.Error("ExistsInDir() = true for empty dir")
-	}
+	assert.False(t, ExistsInDir(tmpDir))
 
 	// Create the file
 	progressPath := filepath.Join(tmpDir, DefaultFilename)
 	err = os.WriteFile(progressPath, []byte("test"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Should exist now
-	if !ExistsInDir(tmpDir) {
-		t.Error("ExistsInDir() = false after creating file")
-	}
+	assert.True(t, ExistsInDir(tmpDir))
 }
 
 func TestReadEmpty(t *testing.T) {
 	content, err := Read("/nonexistent/path/progress.txt")
-	if err != nil {
-		t.Errorf("Read() error = %v for nonexistent file", err)
-	}
-	if content != "" {
-		t.Errorf("Read() = %q for nonexistent file, want empty string", content)
-	}
+	assert.NoError(t, err)
+	assert.Empty(t, content)
 }

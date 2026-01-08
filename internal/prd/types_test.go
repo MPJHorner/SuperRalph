@@ -2,6 +2,9 @@ package prd
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCategoryIsValid(t *testing.T) {
@@ -20,9 +23,7 @@ func TestCategoryIsValid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(tt.category), func(t *testing.T) {
-			if got := tt.category.IsValid(); got != tt.want {
-				t.Errorf("Category(%q).IsValid() = %v, want %v", tt.category, got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.category.IsValid())
 		})
 	}
 }
@@ -41,9 +42,7 @@ func TestPriorityIsValid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(tt.priority), func(t *testing.T) {
-			if got := tt.priority.IsValid(); got != tt.want {
-				t.Errorf("Priority(%q).IsValid() = %v, want %v", tt.priority, got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.priority.IsValid())
 		})
 	}
 }
@@ -63,30 +62,22 @@ func TestPRDStats(t *testing.T) {
 
 	stats := prd.Stats()
 
-	if stats.TotalFeatures != 4 {
-		t.Errorf("TotalFeatures = %d, want 4", stats.TotalFeatures)
-	}
-
-	if stats.PassingFeatures != 2 {
-		t.Errorf("PassingFeatures = %d, want 2", stats.PassingFeatures)
-	}
+	assert.Equal(t, 4, stats.TotalFeatures)
+	assert.Equal(t, 2, stats.PassingFeatures)
 
 	// Check category stats
 	funcStats := stats.ByCategory[CategoryFunctional]
-	if funcStats.Total != 2 || funcStats.Passing != 1 {
-		t.Errorf("Functional stats = %+v, want {Total:2, Passing:1}", funcStats)
-	}
+	assert.Equal(t, 2, funcStats.Total)
+	assert.Equal(t, 1, funcStats.Passing)
 
 	uiStats := stats.ByCategory[CategoryUI]
-	if uiStats.Total != 1 || uiStats.Passing != 1 {
-		t.Errorf("UI stats = %+v, want {Total:1, Passing:1}", uiStats)
-	}
+	assert.Equal(t, 1, uiStats.Total)
+	assert.Equal(t, 1, uiStats.Passing)
 
 	// Check priority stats
 	highStats := stats.ByPriority[PriorityHigh]
-	if highStats.Total != 2 || highStats.Passing != 1 {
-		t.Errorf("High priority stats = %+v, want {Total:2, Passing:1}", highStats)
-	}
+	assert.Equal(t, 2, highStats.Total)
+	assert.Equal(t, 1, highStats.Passing)
 }
 
 func TestPRDNextFeature(t *testing.T) {
@@ -100,14 +91,10 @@ func TestPRDNextFeature(t *testing.T) {
 	}
 
 	next := prd.NextFeature()
-	if next == nil {
-		t.Fatal("NextFeature() returned nil")
-	}
+	require.NotNil(t, next)
 
 	// Should return highest priority non-passing feature
-	if next.ID != "feat-004" {
-		t.Errorf("NextFeature().ID = %q, want %q", next.ID, "feat-004")
-	}
+	assert.Equal(t, "feat-004", next.ID)
 }
 
 func TestPRDNextFeatureAllPassing(t *testing.T) {
@@ -119,9 +106,7 @@ func TestPRDNextFeatureAllPassing(t *testing.T) {
 	}
 
 	next := prd.NextFeature()
-	if next != nil {
-		t.Errorf("NextFeature() = %v, want nil", next)
-	}
+	assert.Nil(t, next)
 }
 
 func TestPRDIsComplete(t *testing.T) {
@@ -156,9 +141,7 @@ func TestPRDIsComplete(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			prd := &PRD{Features: tt.features}
-			if got := prd.IsComplete(); got != tt.want {
-				t.Errorf("IsComplete() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, prd.IsComplete())
 		})
 	}
 }
@@ -182,9 +165,7 @@ func TestPRDStatsPercentComplete(t *testing.T) {
 				TotalFeatures:   tt.total,
 				PassingFeatures: tt.passing,
 			}
-			if got := stats.PercentComplete(); got != tt.want {
-				t.Errorf("PercentComplete() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, stats.PercentComplete())
 		})
 	}
 }
@@ -254,12 +235,8 @@ func TestDependenciesMet(t *testing.T) {
 					break
 				}
 			}
-			if feature == nil {
-				t.Fatalf("Feature %s not found", tt.checkID)
-			}
-			if got := p.DependenciesMet(feature); got != tt.want {
-				t.Errorf("DependenciesMet(%s) = %v, want %v", tt.checkID, got, tt.want)
-			}
+			require.NotNil(t, feature, "Feature %s not found", tt.checkID)
+			assert.Equal(t, tt.want, p.DependenciesMet(feature))
 		})
 	}
 }
@@ -320,12 +297,8 @@ func TestNextFeatureWithDependencies(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &PRD{Features: tt.features}
 			next := p.NextFeature()
-			if next == nil {
-				t.Fatal("NextFeature() returned nil")
-			}
-			if next.ID != tt.wantID {
-				t.Errorf("NextFeature().ID = %q, want %q", next.ID, tt.wantID)
-			}
+			require.NotNil(t, next)
+			assert.Equal(t, tt.wantID, next.ID)
 		})
 	}
 }
@@ -340,19 +313,12 @@ func TestNextFeatureWithReason(t *testing.T) {
 	}
 
 	next, reason := p.NextFeatureWithReason()
-	if next == nil {
-		t.Fatal("NextFeatureWithReason() returned nil feature")
-	}
-	if next.ID != "feat-002" {
-		t.Errorf("NextFeatureWithReason().ID = %q, want %q", next.ID, "feat-002")
-	}
-	if reason == "" {
-		t.Error("NextFeatureWithReason() returned empty reason")
-	}
+	require.NotNil(t, next)
+	assert.Equal(t, "feat-002", next.ID)
+	assert.NotEmpty(t, reason)
 	// Should mention that feat-001 is blocked
-	if !contains(reason, "feat-001") || !contains(reason, "blocked") {
-		t.Errorf("Reason should mention blocked feature: %q", reason)
-	}
+	assert.Contains(t, reason, "feat-001")
+	assert.Contains(t, reason, "blocked")
 }
 
 func TestGetBlockedFeatures(t *testing.T) {
@@ -366,12 +332,8 @@ func TestGetBlockedFeatures(t *testing.T) {
 	}
 
 	blocked := p.GetBlockedFeatures()
-	if len(blocked) != 1 {
-		t.Errorf("GetBlockedFeatures() returned %d features, want 1", len(blocked))
-	}
-	if len(blocked) > 0 && blocked[0].ID != "feat-002" {
-		t.Errorf("GetBlockedFeatures()[0].ID = %q, want %q", blocked[0].ID, "feat-002")
-	}
+	require.Len(t, blocked, 1)
+	assert.Equal(t, "feat-002", blocked[0].ID)
 }
 
 func TestGetUnmetDependencies(t *testing.T) {
@@ -392,12 +354,8 @@ func TestGetUnmetDependencies(t *testing.T) {
 	}
 
 	unmet := p.GetUnmetDependencies(feat003)
-	if len(unmet) != 1 {
-		t.Errorf("GetUnmetDependencies() returned %d, want 1", len(unmet))
-	}
-	if len(unmet) > 0 && unmet[0] != "feat-002" {
-		t.Errorf("GetUnmetDependencies()[0] = %q, want %q", unmet[0], "feat-002")
-	}
+	require.Len(t, unmet, 1)
+	assert.Equal(t, "feat-002", unmet[0])
 }
 
 func TestFeatureDependsOnField(t *testing.T) {
@@ -406,23 +364,6 @@ func TestFeatureDependsOnField(t *testing.T) {
 		ID:        "feat-001",
 		DependsOn: []string{"feat-000"},
 	}
-	if len(f.DependsOn) != 1 {
-		t.Errorf("DependsOn length = %d, want 1", len(f.DependsOn))
-	}
-	if f.DependsOn[0] != "feat-000" {
-		t.Errorf("DependsOn[0] = %q, want %q", f.DependsOn[0], "feat-000")
-	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	require.Len(t, f.DependsOn, 1)
+	assert.Equal(t, "feat-000", f.DependsOn[0])
 }

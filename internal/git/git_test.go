@@ -4,98 +4,71 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsRepo(t *testing.T) {
 	// Create a temp directory
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err, "Failed to create temp dir")
 	defer os.RemoveAll(tmpDir)
 
 	// Should not be a repo initially
-	if IsRepo(tmpDir) {
-		t.Error("IsRepo() = true for non-git dir")
-	}
+	assert.False(t, IsRepo(tmpDir), "IsRepo() = true for non-git dir")
 
 	// Create .git directory
 	gitDir := filepath.Join(tmpDir, ".git")
 	err = os.Mkdir(gitDir, 0755)
-	if err != nil {
-		t.Fatalf("Failed to create .git dir: %v", err)
-	}
+	require.NoError(t, err, "Failed to create .git dir")
 
 	// Should be a repo now
-	if !IsRepo(tmpDir) {
-		t.Error("IsRepo() = false for git dir")
-	}
+	assert.True(t, IsRepo(tmpDir), "IsRepo() = false for git dir")
 }
 
 func TestInit(t *testing.T) {
 	// Create a temp directory
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err, "Failed to create temp dir")
 	defer os.RemoveAll(tmpDir)
 
 	// Should not be a repo initially
-	if IsRepo(tmpDir) {
-		t.Error("IsRepo() = true before Init()")
-	}
+	assert.False(t, IsRepo(tmpDir), "IsRepo() = true before Init()")
 
 	// Initialize
 	err = Init(tmpDir)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
+	require.NoError(t, err, "Init() error")
 
 	// Should be a repo now
-	if !IsRepo(tmpDir) {
-		t.Error("IsRepo() = false after Init()")
-	}
+	assert.True(t, IsRepo(tmpDir), "IsRepo() = false after Init()")
 }
 
 func TestEnsureRepo(t *testing.T) {
 	// Create a temp directory
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err, "Failed to create temp dir")
 	defer os.RemoveAll(tmpDir)
 
 	// First call should create repo
 	created, err := EnsureRepo(tmpDir)
-	if err != nil {
-		t.Fatalf("EnsureRepo() error = %v", err)
-	}
-	if !created {
-		t.Error("EnsureRepo() created = false, want true")
-	}
+	require.NoError(t, err, "EnsureRepo() error")
+	assert.True(t, created, "EnsureRepo() created = false, want true")
 
 	// Second call should not create repo
 	created, err = EnsureRepo(tmpDir)
-	if err != nil {
-		t.Fatalf("EnsureRepo() second call error = %v", err)
-	}
-	if created {
-		t.Error("EnsureRepo() second call created = true, want false")
-	}
+	require.NoError(t, err, "EnsureRepo() second call error")
+	assert.False(t, created, "EnsureRepo() second call created = true, want false")
 }
 
 func TestGetRecentCommitsNoCommits(t *testing.T) {
 	// Create a temp directory and init git
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err, "Failed to create temp dir")
 	defer os.RemoveAll(tmpDir)
 
 	err = Init(tmpDir)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
+	require.NoError(t, err, "Init() error")
 
 	// Should return empty slice for repo with no commits
 	commits, err := GetRecentCommits(tmpDir, 5)
@@ -103,86 +76,56 @@ func TestGetRecentCommitsNoCommits(t *testing.T) {
 		// This might error on some git versions, that's ok
 		t.Logf("GetRecentCommits() error = %v (may be expected)", err)
 	}
-	if len(commits) != 0 {
-		t.Errorf("GetRecentCommits() = %v, want empty slice", commits)
-	}
+	assert.Empty(t, commits, "GetRecentCommits() should return empty slice")
 }
 
 func TestHasUncommittedChanges(t *testing.T) {
 	// Create a temp directory and init git
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err, "Failed to create temp dir")
 	defer os.RemoveAll(tmpDir)
 
 	err = Init(tmpDir)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
+	require.NoError(t, err, "Init() error")
 
 	// Should have no uncommitted changes initially (empty repo)
 	// Note: new repos have no changes because there's nothing to commit yet
 	hasChanges, err := HasUncommittedChanges(tmpDir)
-	if err != nil {
-		t.Fatalf("HasUncommittedChanges() error = %v", err)
-	}
-	if hasChanges {
-		t.Error("HasUncommittedChanges() = true for empty repo")
-	}
+	require.NoError(t, err, "HasUncommittedChanges() error")
+	assert.False(t, hasChanges, "HasUncommittedChanges() = true for empty repo")
 
 	// Create a file
 	testFile := filepath.Join(tmpDir, "test.txt")
 	err = os.WriteFile(testFile, []byte("test content"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
+	require.NoError(t, err, "Failed to create test file")
 
 	// Should have uncommitted changes now
 	hasChanges, err = HasUncommittedChanges(tmpDir)
-	if err != nil {
-		t.Fatalf("HasUncommittedChanges() error = %v", err)
-	}
-	if !hasChanges {
-		t.Error("HasUncommittedChanges() = false after creating file")
-	}
+	require.NoError(t, err, "HasUncommittedChanges() error")
+	assert.True(t, hasChanges, "HasUncommittedChanges() = false after creating file")
 }
 
 func TestGetStatus(t *testing.T) {
 	// Create a temp directory and init git
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err, "Failed to create temp dir")
 	defer os.RemoveAll(tmpDir)
 
 	err = Init(tmpDir)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
+	require.NoError(t, err, "Init() error")
 
 	// Get status (should be empty)
 	status, err := GetStatus(tmpDir)
-	if err != nil {
-		t.Fatalf("GetStatus() error = %v", err)
-	}
-	if status != "" {
-		t.Errorf("GetStatus() = %q for empty repo, want empty", status)
-	}
+	require.NoError(t, err, "GetStatus() error")
+	assert.Empty(t, status, "GetStatus() should be empty for empty repo")
 
 	// Create a file
 	testFile := filepath.Join(tmpDir, "test.txt")
 	err = os.WriteFile(testFile, []byte("test content"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
+	require.NoError(t, err, "Failed to create test file")
 
 	// Get status (should show untracked file)
 	status, err = GetStatus(tmpDir)
-	if err != nil {
-		t.Fatalf("GetStatus() error = %v", err)
-	}
-	if status == "" {
-		t.Error("GetStatus() = empty after creating file")
-	}
+	require.NoError(t, err, "GetStatus() error")
+	assert.NotEmpty(t, status, "GetStatus() = empty after creating file")
 }

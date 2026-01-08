@@ -16,6 +16,7 @@ Thumbs.db
 # Test artifacts
 *.test
 coverage.out
+coverage/
 
 # Example/test files (kept for dogfooding)
 # prd.json - tracked for self-hosted development

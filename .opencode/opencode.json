@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "formatter": {
+    "gofmt": {
+      "command": ["gofmt", "-w", "$FILE"],
+      "extensions": [".go"]
+    }
+  },
+  "instructions": [".claude/CLAUDE.md"],
+  "watcher": {
+    "ignore": ["build/**", "vendor/**", ".git/**", "*.test"]
+  }
+}

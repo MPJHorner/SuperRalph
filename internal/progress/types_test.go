@@ -3,6 +3,9 @@ package progress
 import (
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestProgressLatestIteration(t *testing.T) {
@@ -37,9 +40,7 @@ func TestProgressLatestIteration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &Progress{Entries: tt.entries}
-			if got := p.LatestIteration(); got != tt.want {
-				t.Errorf("LatestIteration() = %d, want %d", got, tt.want)
-			}
+			assert.Equal(t, tt.want, p.LatestIteration())
 		})
 	}
 }
@@ -47,9 +48,7 @@ func TestProgressLatestIteration(t *testing.T) {
 func TestProgressLatestEntry(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		p := &Progress{Entries: []Entry{}}
-		if got := p.LatestEntry(); got != nil {
-			t.Errorf("LatestEntry() = %v, want nil", got)
-		}
+		assert.Nil(t, p.LatestEntry())
 	})
 
 	t.Run("with entries", func(t *testing.T) {
@@ -60,11 +59,7 @@ func TestProgressLatestEntry(t *testing.T) {
 		}
 		p := &Progress{Entries: entries}
 		got := p.LatestEntry()
-		if got == nil {
-			t.Fatal("LatestEntry() = nil, want entry")
-		}
-		if got.Iteration != 3 {
-			t.Errorf("LatestEntry().Iteration = %d, want 3", got.Iteration)
-		}
+		require.NotNil(t, got)
+		assert.Equal(t, 3, got.Iteration)
 	})
 }

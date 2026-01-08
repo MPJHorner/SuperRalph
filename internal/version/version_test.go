@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestInfo(t *testing.T) {
@@ -23,9 +25,7 @@ func TestInfo(t *testing.T) {
 
 	info := Info()
 
-	if info != "superralph v1.2.3 (abc1234) built 2026-01-07" {
-		t.Errorf("Info() = %q, unexpected format", info)
-	}
+	assert.Equal(t, "superralph v1.2.3 (abc1234) built 2026-01-07", info)
 }
 
 func TestShort(t *testing.T) {
@@ -33,9 +33,7 @@ func TestShort(t *testing.T) {
 	defer func() { Version = origVersion }()
 
 	Version = "v1.2.3"
-	if Short() != "v1.2.3" {
-		t.Errorf("Short() = %q, want %q", Short(), "v1.2.3")
-	}
+	assert.Equal(t, "v1.2.3", Short())
 }
 
 func TestCompareSemver(t *testing.T) {
@@ -66,9 +64,7 @@ func TestCompareSemver(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := compareSemver(tt.a, tt.b); got != tt.want {
-				t.Errorf("compareSemver(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
-			}
+			assert.Equal(t, tt.want, compareSemver(tt.a, tt.b))
 		})
 	}
 }
@@ -144,17 +140,13 @@ func TestIsNewer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			Version = tt.current
 			release := &GitHubRelease{TagName: tt.releaseTag}
-			if got := IsNewer(release); got != tt.want {
-				t.Errorf("IsNewer(%q vs %q) = %v, want %v", tt.current, tt.releaseTag, got, tt.want)
-			}
+			assert.Equal(t, tt.want, IsNewer(release))
 		})
 	}
 }
 
 func TestIsNewerNilRelease(t *testing.T) {
-	if IsNewer(nil) {
-		t.Error("IsNewer(nil) = true, want false")
-	}
+	assert.False(t, IsNewer(nil))
 }
 
 func TestCheckForUpdate(t *testing.T) {
@@ -199,9 +191,7 @@ func TestMin(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := min(tt.a, tt.b); got != tt.want {
-			t.Errorf("min(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
-		}
+		assert.Equal(t, tt.want, min(tt.a, tt.b))
 	}
 }
 
@@ -212,7 +202,5 @@ func TestGitHubReleaseStruct(t *testing.T) {
 		HTMLURL:     "https://github.com/example/repo/releases/tag/v1.0.0",
 	}
 
-	if release.TagName != "v1.0.0" {
-		t.Errorf("TagName = %q, want %q", release.TagName, "v1.0.0")
-	}
+	assert.Equal(t, "v1.0.0", release.TagName)
 }

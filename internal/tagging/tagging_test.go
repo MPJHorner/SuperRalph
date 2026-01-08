@@ -4,19 +4,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNew(t *testing.T) {
 	tagger := New("/tmp/test")
-	if tagger == nil {
-		t.Fatal("expected non-nil tagger")
-	}
-	if tagger.workDir != "/tmp/test" {
-		t.Errorf("expected workDir /tmp/test, got %s", tagger.workDir)
-	}
-	if len(tagger.excludeDirs) == 0 {
-		t.Error("expected default exclude dirs to be set")
-	}
+	require.NotNil(t, tagger)
+	assert.Equal(t, "/tmp/test", tagger.workDir)
+	assert.NotEmpty(t, tagger.excludeDirs)
 }
 
 func TestSetExcludeDirs(t *testing.T) {
@@ -24,133 +21,91 @@ func TestSetExcludeDirs(t *testing.T) {
 	customDirs := []string{"custom1", "custom2"}
 	tagger.SetExcludeDirs(customDirs)
 
-	if len(tagger.excludeDirs) != 2 {
-		t.Errorf("expected 2 exclude dirs, got %d", len(tagger.excludeDirs))
-	}
+	assert.Len(t, tagger.excludeDirs, 2)
 }
 
 func TestParseTagExactFile(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create a test file
 	testFile := filepath.Join(tmpDir, "main.go")
-	if err := os.WriteFile(testFile, []byte("package main"), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
+	err = os.WriteFile(testFile, []byte("package main"), 0644)
+	require.NoError(t, err)
 
 	tagger := New(tmpDir)
 	tag, err := tagger.ParseTag("@main.go")
-	if err != nil {
-		t.Fatalf("ParseTag failed: %v", err)
-	}
+	require.NoError(t, err)
 
-	if tag.Pattern != "@main.go" {
-		t.Errorf("expected pattern @main.go, got %s", tag.Pattern)
-	}
-	if tag.IsExclusion {
-		t.Error("expected IsExclusion to be false")
-	}
-	if len(tag.ResolvedPaths) != 1 {
-		t.Errorf("expected 1 resolved path, got %d", len(tag.ResolvedPaths))
-	}
-	if tag.ResolvedPaths[0] != testFile {
-		t.Errorf("expected resolved path %s, got %s", testFile, tag.ResolvedPaths[0])
-	}
+	assert.Equal(t, "@main.go", tag.Pattern)
+	assert.False(t, tag.IsExclusion)
+	assert.Len(t, tag.ResolvedPaths, 1)
+	assert.Equal(t, testFile, tag.ResolvedPaths[0])
 }
 
 func TestParseTagWithoutPrefix(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	testFile := filepath.Join(tmpDir, "main.go")
-	if err := os.WriteFile(testFile, []byte("package main"), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
+	err = os.WriteFile(testFile, []byte("package main"), 0644)
+	require.NoError(t, err)
 
 	tagger := New(tmpDir)
 	tag, err := tagger.ParseTag("main.go") // Without @ prefix
-	if err != nil {
-		t.Fatalf("ParseTag failed: %v", err)
-	}
+	require.NoError(t, err)
 
-	if len(tag.ResolvedPaths) != 1 {
-		t.Errorf("expected 1 resolved path, got %d", len(tag.ResolvedPaths))
-	}
+	assert.Len(t, tag.ResolvedPaths, 1)
 }
 
 func TestParseTagExclusion(t *testing.T) {
 	tagger := New("/tmp/test")
 	tag, err := tagger.ParseTag("@!vendor")
-	if err != nil {
-		t.Fatalf("ParseTag failed: %v", err)
-	}
+	require.NoError(t, err)
 
-	if tag.Pattern != "@!vendor" {
-		t.Errorf("expected pattern @!vendor, got %s", tag.Pattern)
-	}
-	if !tag.IsExclusion {
-		t.Error("expected IsExclusion to be true")
-	}
-	if len(tag.ResolvedPaths) != 0 {
-		t.Errorf("exclusion patterns should not have resolved paths, got %d", len(tag.ResolvedPaths))
-	}
+	assert.Equal(t, "@!vendor", tag.Pattern)
+	assert.True(t, tag.IsExclusion)
+	assert.Empty(t, tag.ResolvedPaths)
 }
 
 func TestParseTagGlobPattern(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create test files
 	srcDir := filepath.Join(tmpDir, "src")
-	if err := os.Mkdir(srcDir, 0755); err != nil {
-		t.Fatalf("failed to create src dir: %v", err)
-	}
+	err = os.Mkdir(srcDir, 0755)
+	require.NoError(t, err)
 
 	files := []string{"main.go", "util.go", "helper.go"}
 	for _, f := range files {
-		if err := os.WriteFile(filepath.Join(srcDir, f), []byte("package src"), 0644); err != nil {
-			t.Fatalf("failed to write %s: %v", f, err)
-		}
+		err := os.WriteFile(filepath.Join(srcDir, f), []byte("package src"), 0644)
+		require.NoError(t, err)
 	}
 
 	// Create a non-.go file
-	if err := os.WriteFile(filepath.Join(srcDir, "readme.txt"), []byte("readme"), 0644); err != nil {
-		t.Fatalf("failed to write readme.txt: %v", err)
-	}
+	err = os.WriteFile(filepath.Join(srcDir, "readme.txt"), []byte("readme"), 0644)
+	require.NoError(t, err)
 
 	tagger := New(tmpDir)
 	tag, err := tagger.ParseTag("@src/*.go")
-	if err != nil {
-		t.Fatalf("ParseTag failed: %v", err)
-	}
+	require.NoError(t, err)
 
-	if len(tag.ResolvedPaths) != 3 {
-		t.Errorf("expected 3 resolved paths, got %d", len(tag.ResolvedPaths))
-	}
+	assert.Len(t, tag.ResolvedPaths, 3)
 }
 
 func TestParseTagDoubleStarGlob(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create nested directories
 	nestedDir := filepath.Join(tmpDir, "src", "pkg", "util")
-	if err := os.MkdirAll(nestedDir, 0755); err != nil {
-		t.Fatalf("failed to create nested dir: %v", err)
-	}
+	err = os.MkdirAll(nestedDir, 0755)
+	require.NoError(t, err)
 
 	// Create .go files at different levels
 	os.WriteFile(filepath.Join(tmpDir, "src", "main.go"), []byte("package main"), 0644)
@@ -159,89 +114,63 @@ func TestParseTagDoubleStarGlob(t *testing.T) {
 
 	tagger := New(tmpDir)
 	tag, err := tagger.ParseTag("@src/**/*.go")
-	if err != nil {
-		t.Fatalf("ParseTag failed: %v", err)
-	}
+	require.NoError(t, err)
 
-	if len(tag.ResolvedPaths) != 3 {
-		t.Errorf("expected 3 resolved paths for **, got %d: %v", len(tag.ResolvedPaths), tag.ResolvedPaths)
-	}
+	assert.Len(t, tag.ResolvedPaths, 3)
 }
 
 func TestParseTagNonExistentFile(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	tagger := New(tmpDir)
 	tag, err := tagger.ParseTag("@nonexistent.go")
-	if err != nil {
-		t.Fatalf("ParseTag should not error for non-existent file: %v", err)
-	}
+	require.NoError(t, err)
 
-	if len(tag.ResolvedPaths) != 0 {
-		t.Errorf("expected 0 resolved paths for non-existent file, got %d", len(tag.ResolvedPaths))
-	}
+	assert.Empty(t, tag.ResolvedPaths)
 }
 
 func TestParseTagDirectory(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create a directory with files
 	srcDir := filepath.Join(tmpDir, "src")
-	if err := os.Mkdir(srcDir, 0755); err != nil {
-		t.Fatalf("failed to create src dir: %v", err)
-	}
+	err = os.Mkdir(srcDir, 0755)
+	require.NoError(t, err)
 
 	os.WriteFile(filepath.Join(srcDir, "file1.go"), []byte("package src"), 0644)
 	os.WriteFile(filepath.Join(srcDir, "file2.go"), []byte("package src"), 0644)
 
 	tagger := New(tmpDir)
 	tag, err := tagger.ParseTag("@src")
-	if err != nil {
-		t.Fatalf("ParseTag failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Should return files in the directory (non-recursive)
-	if len(tag.ResolvedPaths) != 2 {
-		t.Errorf("expected 2 files in directory, got %d", len(tag.ResolvedPaths))
-	}
+	assert.Len(t, tag.ResolvedPaths, 2)
 }
 
 func TestLoadContents(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	testContent := "package main\n\nfunc main() {}"
 	testFile := filepath.Join(tmpDir, "main.go")
-	if err := os.WriteFile(testFile, []byte(testContent), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
+	err = os.WriteFile(testFile, []byte(testContent), 0644)
+	require.NoError(t, err)
 
 	tagger := New(tmpDir)
 	tag, err := tagger.ParseTag("@main.go")
-	if err != nil {
-		t.Fatalf("ParseTag failed: %v", err)
-	}
+	require.NoError(t, err)
 
-	if err := tagger.LoadContents(tag); err != nil {
-		t.Fatalf("LoadContents failed: %v", err)
-	}
+	err = tagger.LoadContents(tag)
+	require.NoError(t, err)
 
-	if content, ok := tag.Contents["main.go"]; !ok {
-		t.Error("Contents should contain main.go")
-	} else if content != testContent {
-		t.Errorf("Content mismatch: got %q, want %q", content, testContent)
-	}
+	assert.Contains(t, tag.Contents, "main.go")
+	assert.Equal(t, testContent, tag.Contents["main.go"])
 }
 
 func TestLoadContentsExclusion(t *testing.T) {
@@ -253,20 +182,14 @@ func TestLoadContentsExclusion(t *testing.T) {
 	}
 
 	err := tagger.LoadContents(tag)
-	if err != nil {
-		t.Fatalf("LoadContents should not fail for exclusion: %v", err)
-	}
+	require.NoError(t, err)
 
-	if len(tag.Contents) != 0 {
-		t.Error("Exclusion patterns should have no contents")
-	}
+	assert.Empty(t, tag.Contents)
 }
 
 func TestResolveTags(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
@@ -274,30 +197,21 @@ func TestResolveTags(t *testing.T) {
 
 	tagger := New(tmpDir)
 	tags, err := tagger.ResolveTags([]string{"@main.go", "@util.go", "@!vendor"})
-	if err != nil {
-		t.Fatalf("ResolveTags failed: %v", err)
-	}
+	require.NoError(t, err)
 
-	if len(tags) != 3 {
-		t.Errorf("expected 3 tags, got %d", len(tags))
-	}
+	assert.Len(t, tags, 3)
 
 	// Check first two are inclusions
-	if tags[0].IsExclusion || tags[1].IsExclusion {
-		t.Error("first two tags should not be exclusions")
-	}
+	assert.False(t, tags[0].IsExclusion)
+	assert.False(t, tags[1].IsExclusion)
 
 	// Check last is exclusion
-	if !tags[2].IsExclusion {
-		t.Error("last tag should be an exclusion")
-	}
+	assert.True(t, tags[2].IsExclusion)
 }
 
 func TestBuildTaggedFilesMap(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create files
@@ -311,33 +225,20 @@ func TestBuildTaggedFilesMap(t *testing.T) {
 
 	tagger := New(tmpDir)
 	tags, err := tagger.ResolveTags([]string{"@*.go", "@!vendor"})
-	if err != nil {
-		t.Fatalf("ResolveTags failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	filesMap, err := tagger.BuildTaggedFilesMap(tags)
-	if err != nil {
-		t.Fatalf("BuildTaggedFilesMap failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Should have main.go and util.go
-	if len(filesMap) != 2 {
-		t.Errorf("expected 2 files in map, got %d: %v", len(filesMap), filesMap)
-	}
-
-	if _, ok := filesMap["main.go"]; !ok {
-		t.Error("filesMap should contain main.go")
-	}
-	if _, ok := filesMap["util.go"]; !ok {
-		t.Error("filesMap should contain util.go")
-	}
+	assert.Len(t, filesMap, 2)
+	assert.Contains(t, filesMap, "main.go")
+	assert.Contains(t, filesMap, "util.go")
 }
 
 func TestBuildTaggedFilesMapWithExclusion(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create test directory
@@ -352,29 +253,19 @@ func TestBuildTaggedFilesMapWithExclusion(t *testing.T) {
 
 	// Include all .go files but exclude test directory
 	tags, err := tagger.ResolveTags([]string{"@**/*.go", "@main.go", "@!test"})
-	if err != nil {
-		t.Fatalf("ResolveTags failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	filesMap, err := tagger.BuildTaggedFilesMap(tags)
-	if err != nil {
-		t.Fatalf("BuildTaggedFilesMap failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Should only have main.go (test directory excluded)
-	if _, ok := filesMap["main.go"]; !ok {
-		t.Error("filesMap should contain main.go")
-	}
-	if _, ok := filesMap["test/main_test.go"]; ok {
-		t.Error("filesMap should NOT contain test/main_test.go (excluded)")
-	}
+	assert.Contains(t, filesMap, "main.go")
+	assert.NotContains(t, filesMap, "test/main_test.go")
 }
 
 func TestListFiles(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create some files and directories
@@ -393,54 +284,16 @@ func TestListFiles(t *testing.T) {
 
 	tagger := New(tmpDir)
 	files, err := tagger.ListFiles(3)
-	if err != nil {
-		t.Fatalf("ListFiles failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Should contain main.go, .gitignore, src/, src/util.go
 	// Should NOT contain .hidden, node_modules
-	hasMain := false
-	hasGitignore := false
-	hasSrc := false
-	hasSrcUtil := false
-	hasHidden := false
-	hasNodeModules := false
-
-	for _, f := range files {
-		switch f {
-		case "main.go":
-			hasMain = true
-		case ".gitignore":
-			hasGitignore = true
-		case "src/":
-			hasSrc = true
-		case "src/util.go":
-			hasSrcUtil = true
-		case ".hidden":
-			hasHidden = true
-		case "node_modules/":
-			hasNodeModules = true
-		}
-	}
-
-	if !hasMain {
-		t.Error("files should contain main.go")
-	}
-	if !hasGitignore {
-		t.Error("files should contain .gitignore")
-	}
-	if !hasSrc {
-		t.Error("files should contain src/")
-	}
-	if !hasSrcUtil {
-		t.Error("files should contain src/util.go")
-	}
-	if hasHidden {
-		t.Error("files should NOT contain .hidden")
-	}
-	if hasNodeModules {
-		t.Error("files should NOT contain node_modules/")
-	}
+	assert.Contains(t, files, "main.go")
+	assert.Contains(t, files, ".gitignore")
+	assert.Contains(t, files, "src/")
+	assert.Contains(t, files, "src/util.go")
+	assert.NotContains(t, files, ".hidden")
+	assert.NotContains(t, files, "node_modules/")
 }
 
 func TestParseTagString(t *testing.T) {
@@ -484,15 +337,7 @@ func TestParseTagString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := ParseTagString(tt.input)
-			if len(got) != len(tt.want) {
-				t.Errorf("ParseTagString() = %v, want %v", got, tt.want)
-				return
-			}
-			for i, tag := range got {
-				if tag != tt.want[i] {
-					t.Errorf("ParseTagString()[%d] = %s, want %s", i, tag, tt.want[i])
-				}
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -514,10 +359,7 @@ func TestIsExcluded(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			got := tagger.isExcluded(tt.path)
-			if got != tt.excluded {
-				t.Errorf("isExcluded(%s) = %v, want %v", tt.path, got, tt.excluded)
-			}
+			assert.Equal(t, tt.excluded, tagger.isExcluded(tt.path))
 		})
 	}
 }
@@ -535,25 +377,15 @@ func TestFileTagSerialization(t *testing.T) {
 
 	// We just need to ensure the struct can hold this data
 	// JSON serialization is tested implicitly by the struct tags
-	if tag.Pattern != "@src/**/*.go" {
-		t.Errorf("Pattern should be @src/**/*.go, got %s", tag.Pattern)
-	}
-	if tag.IsExclusion {
-		t.Error("IsExclusion should be false")
-	}
-	if len(tag.ResolvedPaths) != 2 {
-		t.Errorf("Should have 2 resolved paths, got %d", len(tag.ResolvedPaths))
-	}
-	if len(tag.Contents) != 2 {
-		t.Errorf("Should have 2 contents, got %d", len(tag.Contents))
-	}
+	assert.Equal(t, "@src/**/*.go", tag.Pattern)
+	assert.False(t, tag.IsExclusion)
+	assert.Len(t, tag.ResolvedPaths, 2)
+	assert.Len(t, tag.Contents, 2)
 }
 
 func TestExclusionPatternMatching(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tagging-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create directory structure
@@ -564,10 +396,10 @@ func TestExclusionPatternMatching(t *testing.T) {
 
 	// Create files
 	files := map[string]string{
-		"main.go":              "package main",
-		"src/util.go":          "package src",
-		"internal/core.go":     "package internal",
-		"test/main_test.go":    "package test",
+		"main.go":               "package main",
+		"src/util.go":           "package src",
+		"internal/core.go":      "package internal",
+		"test/main_test.go":     "package test",
 		"test/fixtures/data.go": "package fixtures",
 	}
 	for path, content := range files {
@@ -578,14 +410,10 @@ func TestExclusionPatternMatching(t *testing.T) {
 
 	// Test excluding 'test' directory
 	tags, err := tagger.ResolveTags([]string{"@**/*.go", "@!test"})
-	if err != nil {
-		t.Fatalf("ResolveTags failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	filesMap, err := tagger.BuildTaggedFilesMap(tags)
-	if err != nil {
-		t.Fatalf("BuildTaggedFilesMap failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Should have main.go, src/util.go, internal/core.go
 	// Should NOT have test/main_test.go or test/fixtures/data.go
@@ -593,14 +421,10 @@ func TestExclusionPatternMatching(t *testing.T) {
 	excludedFiles := []string{"test/main_test.go", "test/fixtures/data.go"}
 
 	for _, f := range expectedFiles {
-		if _, ok := filesMap[f]; !ok {
-			t.Errorf("filesMap should contain %s", f)
-		}
+		assert.Contains(t, filesMap, f)
 	}
 
 	for _, f := range excludedFiles {
-		if _, ok := filesMap[f]; ok {
-			t.Errorf("filesMap should NOT contain %s", f)
-		}
+		assert.NotContains(t, filesMap, f)
 	}
 }

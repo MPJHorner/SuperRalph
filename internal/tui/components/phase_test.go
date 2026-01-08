@@ -1,22 +1,18 @@
 package components
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewPhaseIndicator(t *testing.T) {
 	p := NewPhaseIndicator()
 
-	if p == nil {
-		t.Fatal("NewPhaseIndicator returned nil")
-	}
-	if p.CurrentPhase != PhaseNone {
-		t.Errorf("Expected initial phase to be PhaseNone, got %s", p.CurrentPhase)
-	}
-	if p.Width != 60 {
-		t.Errorf("Expected default width 60, got %d", p.Width)
-	}
+	require.NotNil(t, p, "NewPhaseIndicator returned nil")
+	assert.Equal(t, PhaseNone, p.CurrentPhase, "Expected initial phase to be PhaseNone")
+	assert.Equal(t, 60, p.Width, "Expected default width 60")
 }
 
 func TestPhaseIndicatorSetPhase(t *testing.T) {
@@ -35,9 +31,7 @@ func TestPhaseIndicatorSetPhase(t *testing.T) {
 
 	for _, tc := range testCases {
 		p.SetPhase(tc.phase)
-		if p.CurrentPhase != tc.expected {
-			t.Errorf("After SetPhase(%s), expected %s, got %s", tc.phase, tc.expected, p.CurrentPhase)
-		}
+		assert.Equal(t, tc.expected, p.CurrentPhase, "After SetPhase(%s)", tc.phase)
 	}
 }
 
@@ -46,9 +40,7 @@ func TestPhaseIndicatorRenderEmpty(t *testing.T) {
 	p.SetPhase(PhaseNone)
 
 	result := p.Render()
-	if result != "" {
-		t.Errorf("Expected empty render for PhaseNone, got %q", result)
-	}
+	assert.Equal(t, "", result, "Expected empty render for PhaseNone")
 }
 
 func TestPhaseIndicatorRenderContainsLabels(t *testing.T) {
@@ -66,38 +58,20 @@ func TestPhaseIndicatorRenderContainsLabels(t *testing.T) {
 		result := p.Render()
 
 		// Check that all three phase labels are present
-		if !strings.Contains(result, "PLAN") {
-			t.Errorf("Phase %s render missing 'PLAN' label", phase)
-		}
-		if !strings.Contains(result, "VALIDATE") {
-			t.Errorf("Phase %s render missing 'VALIDATE' label", phase)
-		}
-		if !strings.Contains(result, "EXECUTE") {
-			t.Errorf("Phase %s render missing 'EXECUTE' label", phase)
-		}
+		assert.Contains(t, result, "PLAN", "Phase %s render missing 'PLAN' label", phase)
+		assert.Contains(t, result, "VALIDATE", "Phase %s render missing 'VALIDATE' label", phase)
+		assert.Contains(t, result, "EXECUTE", "Phase %s render missing 'EXECUTE' label", phase)
 
 		// Check arrows are present
-		if !strings.Contains(result, "->") {
-			t.Errorf("Phase %s render missing '->' arrows", phase)
-		}
+		assert.Contains(t, result, "->", "Phase %s render missing '->' arrows", phase)
 	}
 }
 
 func TestPhaseConstants(t *testing.T) {
 	// Verify phase constants have expected values
-	if PhasePlanning != "planning" {
-		t.Errorf("PhasePlanning expected 'planning', got %q", PhasePlanning)
-	}
-	if PhaseValidating != "validating" {
-		t.Errorf("PhaseValidating expected 'validating', got %q", PhaseValidating)
-	}
-	if PhaseExecuting != "executing" {
-		t.Errorf("PhaseExecuting expected 'executing', got %q", PhaseExecuting)
-	}
-	if PhaseComplete != "complete" {
-		t.Errorf("PhaseComplete expected 'complete', got %q", PhaseComplete)
-	}
-	if PhaseNone != "" {
-		t.Errorf("PhaseNone expected empty string, got %q", PhaseNone)
-	}
+	assert.Equal(t, Phase("planning"), PhasePlanning)
+	assert.Equal(t, Phase("validating"), PhaseValidating)
+	assert.Equal(t, Phase("executing"), PhaseExecuting)
+	assert.Equal(t, Phase("complete"), PhaseComplete)
+	assert.Equal(t, Phase(""), PhaseNone)
 }

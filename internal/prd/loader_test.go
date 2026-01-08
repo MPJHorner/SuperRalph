@@ -4,14 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoadAndSave(t *testing.T) {
 	// Create a temp directory
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create a test PRD
@@ -34,47 +35,27 @@ func TestLoadAndSave(t *testing.T) {
 	// Save it
 	prdPath := filepath.Join(tmpDir, "prd.json")
 	err = Save(original, prdPath)
-	if err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	// Verify file exists
-	if !Exists(prdPath) {
-		t.Error("Exists() = false after Save()")
-	}
+	assert.True(t, Exists(prdPath))
 
 	// Load it back
 	loaded, err := Load(prdPath)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	// Verify contents
-	if loaded.Name != original.Name {
-		t.Errorf("Name = %q, want %q", loaded.Name, original.Name)
-	}
-	if loaded.Description != original.Description {
-		t.Errorf("Description = %q, want %q", loaded.Description, original.Description)
-	}
-	if loaded.TestCommand != original.TestCommand {
-		t.Errorf("TestCommand = %q, want %q", loaded.TestCommand, original.TestCommand)
-	}
-	if len(loaded.Features) != len(original.Features) {
-		t.Errorf("len(Features) = %d, want %d", len(loaded.Features), len(original.Features))
-	}
-	if len(loaded.Features) > 0 {
-		if loaded.Features[0].ID != original.Features[0].ID {
-			t.Errorf("Features[0].ID = %q, want %q", loaded.Features[0].ID, original.Features[0].ID)
-		}
-	}
+	assert.Equal(t, original.Name, loaded.Name)
+	assert.Equal(t, original.Description, loaded.Description)
+	assert.Equal(t, original.TestCommand, loaded.TestCommand)
+	require.Len(t, loaded.Features, len(original.Features))
+	assert.Equal(t, original.Features[0].ID, loaded.Features[0].ID)
 }
 
 func TestLoadFromDir(t *testing.T) {
 	// Create a temp directory
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Create a test PRD
@@ -96,56 +77,38 @@ func TestLoadFromDir(t *testing.T) {
 
 	// Save using SaveToDir
 	err = SaveToDir(original, tmpDir)
-	if err != nil {
-		t.Fatalf("SaveToDir() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	// Verify file exists
-	if !ExistsInDir(tmpDir) {
-		t.Error("ExistsInDir() = false after SaveToDir()")
-	}
+	assert.True(t, ExistsInDir(tmpDir))
 
 	// Load using LoadFromDir
 	loaded, err := LoadFromDir(tmpDir)
-	if err != nil {
-		t.Fatalf("LoadFromDir() error = %v", err)
-	}
+	require.NoError(t, err)
 
-	if loaded.Name != original.Name {
-		t.Errorf("Name = %q, want %q", loaded.Name, original.Name)
-	}
+	assert.Equal(t, original.Name, loaded.Name)
 }
 
 func TestLoadNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/path/prd.json")
-	if err == nil {
-		t.Error("Load() should return error for nonexistent file")
-	}
+	require.Error(t, err)
 }
 
 func TestLoadInvalidJSON(t *testing.T) {
 	// Create a temp directory
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	// Write invalid JSON
 	prdPath := filepath.Join(tmpDir, "prd.json")
 	err = os.WriteFile(prdPath, []byte("not valid json"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to write test file: %v", err)
-	}
+	require.NoError(t, err)
 
 	_, err = Load(prdPath)
-	if err == nil {
-		t.Error("Load() should return error for invalid JSON")
-	}
+	require.Error(t, err)
 }
 
 func TestExistsNotFound(t *testing.T) {
-	if Exists("/nonexistent/path/prd.json") {
-		t.Error("Exists() = true for nonexistent file")
-	}
+	assert.False(t, Exists("/nonexistent/path/prd.json"))
 }

@@ -1,0 +1,195 @@
+# golangci-lint configuration for SuperRalph
+# Run with: make lint or golangci-lint run
+
+run:
+  # Timeout for analysis
+  timeout: 5m
+  
+  # Include test files
+  tests: true
+  
+  # Skip vendor, third_party, etc.
+  skip-dirs:
+    - vendor
+    - build
+    - .git
+
+linters:
+  # Disable all linters by default, enable specific ones
+  disable-all: true
+  enable:
+    # Default linters
+    - errcheck      # Check for unchecked errors
+    - gosimple      # Simplify code
+    - govet         # Report suspicious constructs
+    - ineffassign   # Detect unused variable assignments
+    - staticcheck   # Static analysis checks
+    - unused        # Check for unused code
+    
+    # Additional linters
+    - gofmt         # Check code is formatted
+    - goimports     # Check imports are organized
+    - misspell      # Find commonly misspelled English words
+    - gosec         # Security-oriented linting
+    - gocritic      # Opinionated linter with many checks
+    - revive        # Fast, configurable, extensible linter
+    - bodyclose     # Check HTTP response body is closed
+    - noctx         # Check for http requests without context
+    - prealloc      # Find slice declarations that could be preallocated
+    - unconvert     # Remove unnecessary type conversions
+    - unparam       # Find unused function parameters
+    - whitespace    # Check for unnecessary newlines
+
+linters-settings:
+  errcheck:
+    # Report about not checking of errors in type assertions
+    check-type-assertions: true
+    # Report about assignment of errors to blank identifier
+    check-blank: true
+    # List of functions to exclude from checking
+    exclude-functions:
+      - fmt.Print
+      - fmt.Println
+      - fmt.Printf
+      - fmt.Fprint
+      - fmt.Fprintln
+      - fmt.Fprintf
+      - (io.Closer).Close
+      - (*os.File).Close
+
+  govet:
+    # Enable all analyzers
+    enable-all: true
+    # Disable specific analyzers
+    disable:
+      - fieldalignment  # Too noisy, often not worth optimizing
+      - shadow          # Handled by revive
+
+  goimports:
+    # Put local imports after 3rd-party packages
+    local-prefixes: github.com/mpjhorner/superralph
+
+  gofmt:
+    # Simplify code
+    simplify: true
+
+  misspell:
+    locale: US
+
+  gosec:
+    # Exclude generated files
+    excludes:
+      - G104  # Audit errors not checked (handled by errcheck)
+      - G304  # File path provided as taint input (acceptable for CLI tool)
+    config:
+      G306:
+        "0644"  # Expected file permissions
+
+  gocritic:
+    # Enable specific checker groups
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+    disabled-checks:
+      - hugeParam          # Too strict for this codebase
+      - rangeValCopy       # Sometimes clearer to copy
+      - commentedOutCode   # Sometimes useful for reference
+
+  revive:
+    # Maximum number of open files at the same time
+    max-open-files: 2048
+    # When set to false, ignores files with "GENERATED" header
+    ignore-generated-header: true
+    # Sets the default severity
+    severity: warning
+    # Enable all available rules
+    enable-all-rules: false
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+        arguments:
+          - "checkPrivateReceivers"
+          - "sayRepetitiveInsteadOfStutters"
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: package-comments
+        disabled: true  # Not needed for internal packages
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+        disabled: true  # Handled by unparam
+      - name: unreachable-code
+      - name: redefines-builtin-id
+
+  unparam:
+    # Don't report unused params for methods implementing interfaces
+    check-exported: false
+
+  prealloc:
+    # Report preallocation suggestions only on simple loops
+    simple: true
+    range-loops: true
+    for-loops: false
+
+issues:
+  # Maximum issues count per one linter (0 = unlimited)
+  max-issues-per-linter: 0
+  
+  # Maximum count of issues with the same text (0 = unlimited)
+  max-same-issues: 0
+  
+  # Exclude some linter messages
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gosec
+        - unparam
+        - gocritic
+    
+    # Ignore long lines in generated code comments
+    - linters:
+        - lll
+      source: "^//go:generate "
+    
+    # Allow fmt.Print in cmd/ for CLI output
+    - path: cmd/
+      linters:
+        - forbidigo
+    
+    # Allow err shadowing in certain patterns
+    - linters:
+        - govet
+      text: "shadow: declaration of .err."
+
+  # Fix found issues (if supported by the linter)
+  fix: false
+
+output:
+  # Format: colored-line-number, line-number, json, tab, checkstyle, github-actions
+  formats:
+    - format: colored-line-number
+  
+  # Print lines of code with issue
+  print-issued-lines: true
+  
+  # Print linter name in the end of issue text
+  print-linter-name: true
+  
+  # Sort results by: filepath, line and column
+  sort-results: true

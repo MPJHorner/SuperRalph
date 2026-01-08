@@ -1,10 +1,10 @@
 package agent
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/mpjhorner/superralph/internal/prd"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBuildPrompt(t *testing.T) {
@@ -39,9 +39,7 @@ func TestBuildPrompt(t *testing.T) {
 	}
 
 	for _, part := range expectedParts {
-		if !strings.Contains(prompt, part) {
-			t.Errorf("Prompt missing expected part: %q", part)
-		}
+		assert.Contains(t, prompt, part, "Prompt missing expected part")
 	}
 }
 
@@ -66,9 +64,7 @@ func TestBuildPlanPrompt(t *testing.T) {
 	}
 
 	for _, part := range expectedParts {
-		if !strings.Contains(prompt, part) {
-			t.Errorf("Plan prompt missing expected part: %q", part)
-		}
+		assert.Contains(t, prompt, part, "Plan prompt missing expected part")
 	}
 }
 
@@ -86,9 +82,8 @@ func TestContainsCompletionSignal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.output, func(t *testing.T) {
-			if got := ContainsCompletionSignal(tt.output); got != tt.want {
-				t.Errorf("ContainsCompletionSignal(%q) = %v, want %v", tt.output, got, tt.want)
-			}
+			got := ContainsCompletionSignal(tt.output)
+			assert.Equal(t, tt.want, got, "ContainsCompletionSignal(%q)", tt.output)
 		})
 	}
 }
@@ -112,9 +107,8 @@ func TestContainsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ContainsError(tt.output); got != tt.want {
-				t.Errorf("ContainsError(%q) = %v, want %v", tt.output, got, tt.want)
-			}
+			got := ContainsError(tt.output)
+			assert.Equal(t, tt.want, got, "ContainsError(%q)", tt.output)
 		})
 	}
 }
