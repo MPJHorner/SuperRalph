@@ -190,6 +190,9 @@ func runBuild(cmd *cobra.Command, args []string) {
 		OnActivity(func(activity string) {
 			program.Send(tui.ActivityMsg(activity))
 		}).
+		OnStep(func(step orchestrator.Step) {
+			program.Send(tui.StepChangeMsg{Step: step})
+		}).
 		OnAction(func(action orchestrator.Action, params orchestrator.ActionParams) {
 			switch action {
 			case orchestrator.ActionReadFiles:
@@ -230,9 +233,26 @@ func runBuild(cmd *cobra.Command, args []string) {
 				// Update iteration
 				if bs.Iteration != currentIteration {
 					currentIteration = bs.Iteration
+
+					// Find the feature in the PRD
+					var feature *prd.Feature
+					if bs.CurrentFeature != "" {
+						// Reload PRD to get current state
+						if currentPRD, err := prd.LoadFromCurrentDir(); err == nil {
+							for i := range currentPRD.Features {
+								if currentPRD.Features[i].ID == bs.CurrentFeature {
+									feature = &currentPRD.Features[i]
+									break
+								}
+							}
+							// Also send PRD update
+							program.Send(tui.PRDUpdateMsg{PRD: currentPRD, Stats: currentPRD.Stats()})
+						}
+					}
+
 					program.Send(tui.IterationStartMsg{
 						Iteration: bs.Iteration,
-						Feature:   nil, // Will be set when we know the feature
+						Feature:   feature,
 					})
 				}
 
@@ -252,12 +272,9 @@ func runBuild(cmd *cobra.Command, args []string) {
 				}
 				program.Send(tui.PhaseChangeMsg{Phase: tuiPhase})
 
-				// Log phase changes
-				if bs.Phase != "" {
-					program.Send(tui.LogMsg(fmt.Sprintf("Phase: %s", bs.Phase)))
-				}
-				if bs.CurrentFeature != "" {
-					program.Send(tui.LogMsg(fmt.Sprintf("Feature: %s", bs.CurrentFeature)))
+				// Send step change if available
+				if bs.CurrentStep != "" {
+					program.Send(tui.StepChangeMsg{Step: bs.CurrentStep})
 				}
 			}
 		})

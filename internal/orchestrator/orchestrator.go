@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/mpjhorner/superralph/internal/prd"
 	"github.com/mpjhorner/superralph/internal/tagging"
 )
 
@@ -53,6 +54,7 @@ type Orchestrator struct {
 	onOutput      func(line string)
 	onTypedOutput func(outputType OutputType, content string)
 	onActivity    func(activity string) // Current activity summary (e.g., "Reading src/main.go")
+	onStep        func(step Step)       // Current step in the iteration
 	promptUser    func(question string) (string, error)
 }
 
@@ -155,6 +157,12 @@ func (o *Orchestrator) OnTypedOutput(fn func(outputType OutputType, content stri
 // OnActivity sets the callback for current activity updates
 func (o *Orchestrator) OnActivity(fn func(activity string)) *Orchestrator {
 	o.onActivity = fn
+	return o
+}
+
+// OnStep sets the callback for step changes
+func (o *Orchestrator) OnStep(fn func(step Step)) *Orchestrator {
+	o.onStep = fn
 	return o
 }
 
@@ -281,27 +289,136 @@ When done, create the prd.json file with this structure:
 	return o.runClaudeInteractive(ctx, promptBuilder.String())
 }
 
+// BuildConfig holds configuration for the build loop
+type BuildConfig struct {
+	// MaxIterations is the safety limit for agent loops (default: 50)
+	MaxIterations int
+
+	// DelayBetweenIterations is the delay between Claude invocations (default: 3s)
+	DelayBetweenIterations time.Duration
+}
+
+// DefaultBuildConfig returns the default build configuration
+func DefaultBuildConfig() BuildConfig {
+	return BuildConfig{
+		MaxIterations:          50,
+		DelayBetweenIterations: 3 * time.Second,
+	}
+}
+
 // RunBuild runs the build loop using fresh context per iteration.
 // Each Claude call gets clean, self-contained context with no conversation history accumulation.
+// This is the core "Ralph Wiggum" loop: run Claude, check completion, loop with fresh context.
 func (o *Orchestrator) RunBuild(ctx context.Context) error {
-	o.session.Mode = "build"
-	buildState := &BuildState{Phase: "reading", Iteration: 1}
-	o.session.State = buildState
+	return o.RunBuildWithConfig(ctx, DefaultBuildConfig())
+}
 
-	// Build fresh iteration context - no message accumulation
-	// State lives in files (prd.json, progress.txt), not in conversation history
-	iterCtx, err := o.BuildIterationContext(buildState.Iteration, "", nil)
-	if err != nil {
-		return fmt.Errorf("failed to build iteration context: %w", err)
+// RunBuildWithConfig runs the build loop with custom configuration.
+// This implements the core Ralph Wiggum concept:
+// 1. Read prd.json fresh each iteration
+// 2. Check if all features pass - if so, exit
+// 3. Build fresh iteration context (clean slate)
+// 4. Run Claude once for a single feature
+// 5. Wait for Claude to complete
+// 6. Loop back to step 1
+func (o *Orchestrator) RunBuildWithConfig(ctx context.Context, config BuildConfig) error {
+	o.session.Mode = "build"
+
+	for iteration := 1; iteration <= config.MaxIterations; iteration++ {
+		// Check context cancellation at start of each iteration
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		// === Step 1: Read PRD fresh from disk ===
+		o.typedOutput(OutputInfo, fmt.Sprintf("=== Iteration %d/%d ===", iteration, config.MaxIterations))
+		o.activity("Loading PRD...")
+
+		currentPRD, err := prd.LoadFromDir(o.workDir)
+		if err != nil {
+			return fmt.Errorf("failed to load prd.json: %w", err)
+		}
+
+		// === Step 2: Check if all features complete ===
+		if currentPRD.IsComplete() {
+			o.typedOutput(OutputSuccess, "All features complete!")
+			o.activity("Complete")
+			return nil
+		}
+
+		// Get next feature for display
+		nextFeature, reason := currentPRD.NextFeatureWithReason()
+		if nextFeature == nil {
+			// All features pass or are blocked - should not happen if IsComplete returned false
+			o.typedOutput(OutputError, "No available features to work on (all may be blocked)")
+			return fmt.Errorf("no available features: %s", reason)
+		}
+
+		stats := currentPRD.Stats()
+		o.typedOutput(OutputInfo, fmt.Sprintf("Progress: %d/%d features complete", stats.PassingFeatures, stats.TotalFeatures))
+		o.typedOutput(OutputInfo, fmt.Sprintf("Next: %s - %s", nextFeature.ID, nextFeature.Description))
+
+		// === Step 3: Build fresh iteration context (clean slate) ===
+		buildState := &BuildState{
+			Phase:          "reading",
+			Iteration:      iteration,
+			CurrentFeature: nextFeature.ID,
+		}
+		o.session.State = buildState
+
+		// Notify TUI of iteration start
+		if o.onState != nil {
+			o.onState(buildState)
+		}
+
+		iterCtx, err := o.BuildIterationContext(iteration, "", nil)
+		if err != nil {
+			return fmt.Errorf("failed to build iteration context: %w", err)
+		}
+
+		// Generate prompt from fresh context
+		prompt := iterCtx.BuildPrompt()
+
+		// Clear any accumulated messages - each iteration is independent
+		o.session.Messages = []Message{}
+
+		// === Step 4: Run Claude once ===
+		o.activity(fmt.Sprintf("Working on %s...", nextFeature.ID))
+		err = o.runClaudeInteractive(ctx, prompt)
+
+		if err != nil {
+			// Check if it was a cancellation
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// Log the error but continue to next iteration (Claude may have partially succeeded)
+			o.typedOutput(OutputError, fmt.Sprintf("Iteration %d error: %v", iteration, err))
+		}
+
+		// === Step 5: Short delay before next iteration ===
+		// This allows file system to settle and prevents hammering
+		if iteration < config.MaxIterations {
+			o.activity("Preparing next iteration...")
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(config.DelayBetweenIterations):
+				// Continue to next iteration
+			}
+		}
 	}
 
-	// Generate prompt from fresh context
-	prompt := iterCtx.BuildPrompt()
+	// Reached max iterations
+	o.typedOutput(OutputInfo, fmt.Sprintf("Reached maximum iterations (%d)", config.MaxIterations))
 
-	// Clear any accumulated messages - each iteration is independent
-	o.session.Messages = []Message{}
+	// Final check on completion status
+	finalPRD, err := prd.LoadFromDir(o.workDir)
+	if err == nil {
+		stats := finalPRD.Stats()
+		o.typedOutput(OutputInfo, fmt.Sprintf("Final status: %d/%d features complete", stats.PassingFeatures, stats.TotalFeatures))
+	}
 
-	return o.runClaudeInteractive(ctx, prompt)
+	return nil
 }
 
 // RunFeatureLoop runs the three-phase loop (PLAN -> VALIDATE -> EXECUTE) for a single feature.
@@ -683,6 +800,7 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 	startTime := time.Now()
 	o.typedOutput(OutputInfo, "Claude is working...")
 	o.activity("Starting Claude...")
+	o.step(StepReading) // Start with reading step
 
 	// Read stderr in background
 	var stderrBuf strings.Builder
@@ -737,14 +855,20 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 										if cmdStr, ok := input["command"].(string); ok {
 											o.typedOutput(OutputToolInput, "> "+cmdStr)
 											o.activity(fmt.Sprintf("Running: %s", truncateString(cmdStr, 50)))
+											// Detect step from command
+											o.detectStepFromCommand(cmdStr)
 										}
 										if path, ok := input["file_path"].(string); ok {
 											o.typedOutput(OutputToolInput, "> "+path)
 											o.activity(fmt.Sprintf("%s: %s", name, path))
+											// Detect step from file operation
+											o.detectStepFromFileOp(name, path)
 										}
 										if filePath, ok := input["filePath"].(string); ok {
 											o.typedOutput(OutputToolInput, "> "+filePath)
 											o.activity(fmt.Sprintf("%s: %s", name, filePath))
+											// Detect step from file operation
+											o.detectStepFromFileOp(name, filePath)
 										}
 									}
 								}
@@ -829,6 +953,7 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 	elapsed := time.Since(startTime).Seconds()
 	o.typedOutput(OutputSuccess, fmt.Sprintf("Complete: %.1fs", elapsed))
 	o.activity("Complete")
+	o.step(StepComplete)
 
 	return nil
 }
@@ -870,6 +995,87 @@ func (o *Orchestrator) typedOutput(outputType OutputType, content string) {
 func (o *Orchestrator) activity(activity string) {
 	if o.onActivity != nil {
 		o.onActivity(activity)
+	}
+}
+
+// step updates the current step
+func (o *Orchestrator) step(s Step) {
+	if o.onStep != nil {
+		o.onStep(s)
+	}
+}
+
+// detectStepFromCommand detects the current step based on a bash command
+func (o *Orchestrator) detectStepFromCommand(cmd string) {
+	cmdLower := strings.ToLower(cmd)
+
+	// Test commands
+	if strings.Contains(cmdLower, "test") ||
+		strings.Contains(cmdLower, "pytest") ||
+		strings.Contains(cmdLower, "jest") ||
+		strings.Contains(cmdLower, "mocha") ||
+		strings.Contains(cmdLower, "cargo test") ||
+		strings.HasPrefix(cmdLower, "go test") {
+		o.step(StepTesting)
+		return
+	}
+
+	// Git commands
+	if strings.HasPrefix(cmdLower, "git commit") ||
+		strings.HasPrefix(cmdLower, "git add") && strings.Contains(cmdLower, "-m") {
+		o.step(StepCommitting)
+		return
+	}
+
+	if strings.HasPrefix(cmdLower, "git ") {
+		// Other git commands like status, diff, log are usually part of reading
+		o.step(StepReading)
+		return
+	}
+
+	// Build commands might be part of testing
+	if strings.HasPrefix(cmdLower, "go build") ||
+		strings.HasPrefix(cmdLower, "npm run build") ||
+		strings.HasPrefix(cmdLower, "make") {
+		o.step(StepTesting)
+		return
+	}
+}
+
+// detectStepFromFileOp detects the current step based on a file operation
+func (o *Orchestrator) detectStepFromFileOp(toolName, filePath string) {
+	filePathLower := strings.ToLower(filePath)
+	toolNameLower := strings.ToLower(toolName)
+
+	// Check if it's a read operation
+	if toolNameLower == "read" {
+		o.step(StepReading)
+		return
+	}
+
+	// Write/Edit operations
+	if toolNameLower == "write" || toolNameLower == "edit" {
+		// Check for PRD/progress file updates
+		if strings.Contains(filePathLower, "prd.json") ||
+			strings.Contains(filePathLower, "progress.txt") {
+			o.step(StepUpdating)
+			return
+		}
+
+		// Check for test files
+		if strings.Contains(filePathLower, "_test.") ||
+			strings.Contains(filePathLower, ".test.") ||
+			strings.Contains(filePathLower, "/test/") ||
+			strings.Contains(filePathLower, "/tests/") ||
+			strings.Contains(filePathLower, ".spec.") {
+			// Writing tests is usually part of coding
+			o.step(StepCoding)
+			return
+		}
+
+		// Any other file write is coding
+		o.step(StepCoding)
+		return
 	}
 }
 

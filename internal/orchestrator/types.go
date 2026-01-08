@@ -97,6 +97,7 @@ type BuildState struct {
 	Iteration      int    `json:"iteration"`
 	TestsPassing   bool   `json:"tests_passing"`
 	LastError      string `json:"last_error,omitempty"`
+	CurrentStep    Step   `json:"current_step,omitempty"` // Granular step tracking
 }
 
 // Phase represents the current phase of the three-phase loop
@@ -107,6 +108,63 @@ const (
 	PhaseValidating Phase = "validating"
 	PhaseExecuting  Phase = "executing"
 )
+
+// Step represents the granular step within an iteration
+type Step string
+
+const (
+	StepReading    Step = "reading"    // Reading PRD, progress, codebase
+	StepPlanning   Step = "planning"   // Creating implementation plan
+	StepCoding     Step = "coding"     // Writing/editing code
+	StepTesting    Step = "testing"    // Running tests
+	StepCommitting Step = "committing" // Making git commit
+	StepUpdating   Step = "updating"   // Updating prd.json, progress.txt
+	StepComplete   Step = "complete"   // Iteration complete
+	StepIdle       Step = "idle"       // Not doing anything
+)
+
+// StepInfo provides details about a step
+type StepInfo struct {
+	Step        Step   // Current step
+	Description string // Human-readable description
+}
+
+// AllSteps returns all steps in order
+func AllSteps() []Step {
+	return []Step{
+		StepReading,
+		StepPlanning,
+		StepCoding,
+		StepTesting,
+		StepCommitting,
+		StepUpdating,
+		StepComplete,
+	}
+}
+
+// String returns the step as a human-readable string
+func (s Step) String() string {
+	switch s {
+	case StepReading:
+		return "Reading"
+	case StepPlanning:
+		return "Planning"
+	case StepCoding:
+		return "Coding"
+	case StepTesting:
+		return "Testing"
+	case StepCommitting:
+		return "Committing"
+	case StepUpdating:
+		return "Updating"
+	case StepComplete:
+		return "Complete"
+	case StepIdle:
+		return "Idle"
+	default:
+		return string(s)
+	}
+}
 
 // ValidationResult represents the result of the validation phase
 type ValidationResult struct {
@@ -443,30 +501,59 @@ summary: [Brief summary of what was implemented]
 	return sb.String()
 }
 
-// buildDefaultTaskInstructions returns the default task instructions (legacy mode)
+// buildDefaultTaskInstructions returns the default task instructions (single-feature mode)
 func (ic *IterationContext) buildDefaultTaskInstructions() string {
-	return `## Your Task
+	return `## Your Task - Single Feature Implementation
 
-1. Look at the PRD and select the next feature using this logic:
-   - Skip features with passes: true (already done)
-   - Skip features blocked by unmet dependencies (check depends_on field)
-   - Pick the highest priority first (high > medium > low)
-   - Within same priority, pick first by ID order
-2. Report which feature you selected and WHY (e.g., "Selected feat-003: medium priority, feat-002 blocked by unmet dependency on feat-001")
-3. Implement that feature
-4. Run the tests using the testCommand from the PRD
-5. If tests pass:
-   - Update prd.json to set "passes": true for the completed feature
-   - Make a git commit with a descriptive message
-   - Append a summary to progress.txt
-6. If tests fail, fix the issues and try again
-7. Continue until all features pass or you need to stop
+This is iteration ` + fmt.Sprintf("%d", ic.Iteration) + `. You will implement ONE feature then EXIT.
 
-IMPORTANT RULES:
+### Step 1: Select the Next Feature
+
+Look at the PRD and select the next feature using this logic:
+- Skip features with passes: true (already done)
+- Skip features blocked by unmet dependencies (check depends_on field)
+- Pick the highest priority first (high > medium > low)
+- Within same priority, pick first by ID order
+
+Report which feature you selected and WHY.
+
+### Step 2: Implement the Feature
+
+1. Read relevant code to understand the current implementation
+2. Make the necessary changes to implement the feature
+3. Write/update tests as needed
+
+### Step 3: Run Tests
+
+Run the tests using the testCommand from the PRD.
+
+- If tests PASS: Continue to Step 4
+- If tests FAIL: Fix the issues and run tests again (max 3 attempts)
+
+### Step 4: Commit and Update (only if tests pass)
+
+1. Update prd.json to set "passes": true for the completed feature
+2. Make a git commit with a descriptive message
+3. Append a summary to progress.txt with:
+   - Feature ID and description
+   - What was implemented
+   - Any notes for future iterations
+
+### Step 5: EXIT
+
+After completing (or failing) this ONE feature, you are DONE.
+Do NOT continue to the next feature.
+The orchestrator will restart you with fresh context for the next iteration.
+
+---
+
+## IMPORTANT RULES
+
 - Tests MUST pass before any commit
-- Work on ONE feature at a time
+- Work on ONLY ONE feature per iteration
+- EXIT after completing or failing the feature
 - Make small, incremental changes
-- Always run tests after changes
+- The orchestrator handles looping - you handle one feature
 
-Start by reading the codebase to understand the current implementation, then implement the next feature.`
+This "clean slate" approach ensures each iteration starts fresh without accumulated context.`
 }

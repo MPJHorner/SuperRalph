@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/mpjhorner/superralph/internal/orchestrator"
 	"github.com/mpjhorner/superralph/internal/prd"
 	"github.com/mpjhorner/superralph/internal/tui/components"
 )
@@ -61,6 +62,9 @@ type Model struct {
 	// Phase tracking
 	CurrentPhase components.Phase
 
+	// Step tracking (granular step within iteration)
+	CurrentStep orchestrator.Step
+
 	// Current activity (what Claude is doing right now)
 	CurrentActivity string
 
@@ -69,6 +73,8 @@ type Model struct {
 	LogView        *components.LogView
 	PhaseIndicator *components.PhaseIndicator
 	ActionPanel    *components.ActionPanel
+	FeatureList    *components.FeatureList
+	StepIndicator  *components.StepIndicator
 	Width          int
 	Height         int
 
@@ -88,6 +94,10 @@ func NewModel(p *prd.PRD, prdPath string, maxIterations int) Model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(ColorPrimary)
 
+	// Initialize feature list
+	featureList := components.NewFeatureList(30, 15)
+	featureList.UpdateFromPRD(p, "")
+
 	return Model{
 		PRD:            p,
 		PRDPath:        prdPath,
@@ -96,10 +106,13 @@ func NewModel(p *prd.PRD, prdPath string, maxIterations int) Model {
 		MaxIterations:  maxIterations,
 		MaxRetries:     3,
 		CurrentPhase:   components.PhaseNone,
+		CurrentStep:    orchestrator.StepIdle,
 		Spinner:        s,
 		LogView:        components.NewLogView(80, 10),
 		PhaseIndicator: components.NewPhaseIndicator(),
 		ActionPanel:    components.NewActionPanel(80, 8),
+		FeatureList:    featureList,
+		StepIndicator:  components.NewStepIndicator(),
 		Width:          80,
 		Height:         24,
 		DebugMode:      false,
@@ -177,6 +190,11 @@ type (
 		Success bool
 		Error   error
 	}
+
+	// StepChangeMsg signals a step change
+	StepChangeMsg struct {
+		Step orchestrator.Step
+	}
 )
 
 // Init initializes the model
@@ -227,11 +245,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
+		// Calculate feature list width
+		featureListWidth := 35
+		if m.Width < 100 {
+			featureListWidth = 28
+		}
+		mainColWidth := m.Width - featureListWidth - 7 // Account for gap and borders
 		m.LogView.Width = msg.Width - 4
 		m.LogView.Height = m.Height / 4
-		m.ActionPanel.Width = msg.Width - 4
+		m.ActionPanel.Width = mainColWidth
 		m.ActionPanel.Height = 8
-		m.PhaseIndicator.Width = msg.Width - 4
+		m.PhaseIndicator.Width = mainColWidth
+		m.StepIndicator.Width = mainColWidth
+		m.FeatureList.Width = featureListWidth
+		m.FeatureList.Height = 12
 
 	case TickMsg:
 		return m, tickCmd()
@@ -261,6 +288,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.CurrentFeature = msg.Feature
 		m.RetryCount = 0
 		m.ActionPanel.Clear()
+		m.CurrentStep = orchestrator.StepReading
+		m.StepIndicator.SetStep(orchestrator.StepReading)
+		// Update feature list with current feature
+		if m.CurrentFeature != nil {
+			m.FeatureList.UpdateFromPRD(m.PRD, m.CurrentFeature.ID)
+		}
 
 	case IterationCompleteMsg:
 		if msg.Success {
@@ -272,6 +305,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PRDUpdateMsg:
 		m.PRD = msg.PRD
 		m.PRDStats = msg.Stats
+		// Update feature list
+		currentFeatureID := ""
+		if m.CurrentFeature != nil {
+			currentFeatureID = m.CurrentFeature.ID
+		}
+		m.FeatureList.UpdateFromPRD(m.PRD, currentFeatureID)
 
 	case ErrorMsgType:
 		m.ErrorMsg = msg.Error
@@ -280,6 +319,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PhaseChangeMsg:
 		m.CurrentPhase = msg.Phase
 		m.PhaseIndicator.SetPhase(msg.Phase)
+
+	case StepChangeMsg:
+		m.CurrentStep = msg.Step
+		m.StepIndicator.SetStep(msg.Step)
 
 	case ActionAddMsg:
 		m.ActionPanel.AddAction(msg.Action)
@@ -314,31 +357,82 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	var b strings.Builder
 
-	// Header
+	// Header (full width)
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n")
 
+	// Calculate column widths
+	featureListWidth := 35
+	if m.Width < 100 {
+		featureListWidth = 28 // Narrower on small terminals
+	}
+	mainColWidth := m.Width - featureListWidth - 3 // Account for gap
+
+	// Build left column (main content)
+	var leftCol strings.Builder
+
 	// Progress section
-	b.WriteString(m.renderProgress())
-	b.WriteString("\n")
+	leftCol.WriteString(m.renderProgress())
+	leftCol.WriteString("\n")
 
 	// Phase indicator (if we're in a phase)
 	if m.CurrentPhase != components.PhaseNone {
-		b.WriteString(m.renderPhase())
-		b.WriteString("\n")
+		leftCol.WriteString(m.renderPhase())
+		leftCol.WriteString("\n")
+	}
+
+	// Step indicator (shows current step in iteration)
+	if m.State == StateRunning {
+		leftCol.WriteString(m.renderStep())
+		leftCol.WriteString("\n")
 	}
 
 	// Status section
-	b.WriteString(m.renderStatus())
-	b.WriteString("\n")
+	leftCol.WriteString(m.renderStatus())
+	leftCol.WriteString("\n")
 
 	// Action panel (if there are actions)
 	if len(m.ActionPanel.Actions) > 0 {
-		b.WriteString(m.renderActions())
+		leftCol.WriteString(m.renderActions())
+		leftCol.WriteString("\n")
+	}
+
+	// Build right column (feature list)
+	m.FeatureList.Width = featureListWidth
+	m.FeatureList.Height = 12
+	rightCol := m.FeatureList.Render()
+
+	// Join columns side by side
+	leftContent := leftCol.String()
+	leftLines := strings.Split(leftContent, "\n")
+	rightLines := strings.Split(rightCol, "\n")
+
+	// Pad to same height
+	maxLines := len(leftLines)
+	if len(rightLines) > maxLines {
+		maxLines = len(rightLines)
+	}
+	for len(leftLines) < maxLines {
+		leftLines = append(leftLines, "")
+	}
+	for len(rightLines) < maxLines {
+		rightLines = append(rightLines, "")
+	}
+
+	// Render side by side
+	for i := 0; i < maxLines; i++ {
+		left := leftLines[i]
+		right := rightLines[i]
+
+		// Pad left column to width
+		leftPadded := lipgloss.NewStyle().Width(mainColWidth).Render(left)
+		b.WriteString(leftPadded)
+		b.WriteString("  ") // Gap between columns
+		b.WriteString(right)
 		b.WriteString("\n")
 	}
 
-	// Log section
+	// Log section (full width)
 	b.WriteString(m.renderLog())
 	b.WriteString("\n")
 
@@ -467,6 +561,13 @@ func (m Model) renderPhase() string {
 	var b strings.Builder
 	b.WriteString(BoldStyle.Render("Phase: "))
 	b.WriteString(m.PhaseIndicator.Render())
+	return b.String()
+}
+
+func (m Model) renderStep() string {
+	var b strings.Builder
+	b.WriteString(BoldStyle.Render("Step: "))
+	b.WriteString(m.StepIndicator.Render())
 	return b.String()
 }
 
