@@ -787,14 +787,20 @@ func (o *Orchestrator) runClaudeWithOutput(ctx context.Context, prompt string) (
 	allowedTools := o.toolConfig.BuildAllowedToolsFlag()
 	o.debugLog("Using allowed tools: %s", allowedTools)
 
+	// Pass prompt via stdin to avoid "argument list too long" error for large prompts
 	cmd := exec.CommandContext(ctx, o.claudePath,
-		"-p", prompt,
 		"--permission-mode", "acceptEdits",
 		"--allowedTools", allowedTools,
 		"--output-format", "stream-json",
 		"--verbose",
+		"-p", "-", // Read prompt from stdin
 	)
 	cmd.Dir = o.workDir
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to get stdin pipe: %w", err)
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -809,6 +815,12 @@ func (o *Orchestrator) runClaudeWithOutput(ctx context.Context, prompt string) (
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("failed to start claude: %w", err)
 	}
+
+	// Write prompt to stdin and close to signal end of input
+	go func() {
+		defer stdin.Close()
+		_, _ = io.WriteString(stdin, prompt)
+	}()
 
 	startTime := time.Now()
 
@@ -1032,16 +1044,22 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 	allowedTools := o.toolConfig.BuildAllowedToolsFlag()
 	o.debugLog("Using allowed tools: %s", allowedTools)
 
+	// Pass prompt via stdin to avoid "argument list too long" error for large prompts
 	cmd := exec.CommandContext(ctx, o.claudePath,
-		"-p", prompt,
 		"--permission-mode", "acceptEdits",
 		"--allowedTools", allowedTools,
 		"--output-format", "stream-json",
 		"--verbose",
+		"-p", "-", // Read prompt from stdin
 	)
 	cmd.Dir = o.workDir
 
-	// Get pipes for stdout and stderr
+	// Get pipes for stdin, stdout and stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdin pipe: %w", err)
+	}
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("failed to get stdout pipe: %w", err)
@@ -1056,6 +1074,12 @@ func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start claude: %w", err)
 	}
+
+	// Write prompt to stdin and close to signal end of input
+	go func() {
+		defer stdin.Close()
+		_, _ = io.WriteString(stdin, prompt)
+	}()
 
 	startTime := time.Now()
 	o.typedOutput(OutputInfo, "Claude is working...")

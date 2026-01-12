@@ -105,12 +105,19 @@ func (r *Runner) Run(ctx context.Context, prompt string) error {
 
 	// Build the command
 	// Using claude CLI with permission mode to accept edits automatically
+	// Pass prompt via stdin to avoid "argument list too long" error for large prompts
 	r.cmd = exec.CommandContext(ctx, r.claudePath,
 		"--permission-mode", "acceptEdits",
-		"-p", prompt,
+		"-p", "-", // Read prompt from stdin
 	)
 	r.cmd.Dir = r.workDir
 	r.cmd.Env = os.Environ()
+
+	// Get stdin pipe
+	stdin, err := r.cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdin pipe: %w", err)
+	}
 
 	// Get stdout and stderr pipes
 	stdout, err := r.cmd.StdoutPipe()
@@ -127,6 +134,12 @@ func (r *Runner) Run(ctx context.Context, prompt string) error {
 	if err := r.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start claude: %w", err)
 	}
+
+	// Write prompt to stdin and close to signal end of input
+	go func() {
+		defer stdin.Close()
+		_, _ = io.WriteString(stdin, prompt)
+	}()
 
 	// Read output in goroutines
 	var wg sync.WaitGroup
