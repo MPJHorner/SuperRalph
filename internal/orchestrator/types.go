@@ -308,9 +308,9 @@ func (tc *ToolConfig) BuildAllowedToolsFlag() string {
 // DefaultSnapshotConfig returns the default snapshot configuration
 func DefaultSnapshotConfig() SnapshotConfig {
 	return SnapshotConfig{
-		MaxTreeDepth:     4,
+		MaxTreeDepth:     3,         // Reduced from 4 to keep prompts smaller
 		MaxFileSizeBytes: 50 * 1024, // 50KB
-		IncludeKeyFiles:  true,
+		IncludeKeyFiles:  false,     // Disabled by default - Claude can read files on-demand
 	}
 }
 
@@ -323,21 +323,48 @@ type FeatureContext struct {
 	Category    string   `json:"category"`
 }
 
+// maxProgressLines is the maximum number of lines to include from progress.txt
+const maxProgressLines = 100
+
+// maxPRDSize is the maximum size of PRD content to include inline (chars)
+// Larger PRDs will be summarized
+const maxPRDSize = 20000
+
+// truncateProgress keeps only the last N lines of progress content
+func truncateProgress(content string, maxLines int) string {
+	if content == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) <= maxLines {
+		return content
+	}
+	// Keep the last maxLines lines
+	truncated := lines[len(lines)-maxLines:]
+	return "[... earlier progress truncated ...]\n\n" + strings.Join(truncated, "\n")
+}
+
 // BuildPrompt generates the complete prompt from the iteration context
 func (ic *IterationContext) BuildPrompt() string {
 	var sb strings.Builder
 
 	sb.WriteString("You are implementing features from a PRD. Here is the current state:\n\n")
 
-	// PRD content
+	// PRD content - include full if small, otherwise summarize
 	sb.WriteString("## prd.json\n")
-	sb.WriteString(ic.PRDContent)
+	if len(ic.PRDContent) <= maxPRDSize {
+		sb.WriteString(ic.PRDContent)
+	} else {
+		// Large PRD - tell Claude to read it
+		sb.WriteString("[PRD is large - use Read tool to read prd.json for full details]\n")
+		sb.WriteString("Summary: This PRD contains multiple features. Read prd.json to see all features and their status.\n")
+	}
 	sb.WriteString("\n\n")
 
-	// Progress content
-	sb.WriteString("## progress.txt\n")
+	// Progress content - truncated to recent entries
+	sb.WriteString("## progress.txt (recent entries)\n")
 	if ic.ProgressContent != "" {
-		sb.WriteString(ic.ProgressContent)
+		sb.WriteString(truncateProgress(ic.ProgressContent, maxProgressLines))
 	} else {
 		sb.WriteString("(empty)")
 	}
@@ -351,6 +378,7 @@ func (ic *IterationContext) BuildPrompt() string {
 	}
 
 	// Key files if any (automatically detected project files)
+	// Note: Now disabled by default to keep prompts smaller
 	if len(ic.KeyFiles) > 0 {
 		sb.WriteString("## Key Files\n")
 		sb.WriteString("These are automatically detected important project files:\n\n")

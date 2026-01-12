@@ -923,18 +923,18 @@ func TestSetInitialTagsEmpty(t *testing.T) {
 
 func TestDefaultSnapshotConfig(t *testing.T) {
 	config := DefaultSnapshotConfig()
-	assert.Equal(t, 4, config.MaxTreeDepth)
+	assert.Equal(t, 3, config.MaxTreeDepth) // Reduced to keep prompts smaller
 	assert.Equal(t, int64(50*1024), config.MaxFileSizeBytes)
-	assert.True(t, config.IncludeKeyFiles)
+	assert.False(t, config.IncludeKeyFiles) // Disabled by default - Claude reads on-demand
 }
 
 func TestOrchestratorDefaultSnapshotConfig(t *testing.T) {
 	orch := New("/tmp/test")
 	config := orch.GetSnapshotConfig()
 
-	assert.Equal(t, 4, config.MaxTreeDepth)
+	assert.Equal(t, 3, config.MaxTreeDepth) // Reduced to keep prompts smaller
 	assert.Equal(t, int64(50*1024), config.MaxFileSizeBytes)
-	assert.True(t, config.IncludeKeyFiles)
+	assert.False(t, config.IncludeKeyFiles) // Disabled by default - Claude reads on-demand
 }
 
 func TestSetSnapshotConfig(t *testing.T) {
@@ -998,6 +998,7 @@ func TestDetectKeyFilesGoProject(t *testing.T) {
 	require.NoError(t, err)
 
 	orch := New(tmpDir)
+	orch.SetIncludeKeyFiles(true) // Enable key files for this test
 	ctx, err := orch.BuildIterationContext(1, "", nil)
 	require.NoError(t, err)
 
@@ -1023,6 +1024,7 @@ func TestDetectKeyFilesNodeProject(t *testing.T) {
 	require.NoError(t, err)
 
 	orch := New(tmpDir)
+	orch.SetIncludeKeyFiles(true) // Enable key files for this test
 	ctx, err := orch.BuildIterationContext(1, "", nil)
 	require.NoError(t, err)
 
@@ -1044,6 +1046,7 @@ func TestDetectKeyFilesRustProject(t *testing.T) {
 	require.NoError(t, err)
 
 	orch := New(tmpDir)
+	orch.SetIncludeKeyFiles(true) // Enable key files for this test
 	ctx, err := orch.BuildIterationContext(1, "", nil)
 	require.NoError(t, err)
 
@@ -1063,6 +1066,7 @@ func TestDetectKeyFilesPythonProject(t *testing.T) {
 	require.NoError(t, err)
 
 	orch := New(tmpDir)
+	orch.SetIncludeKeyFiles(true) // Enable key files for this test
 	ctx, err := orch.BuildIterationContext(1, "", nil)
 	require.NoError(t, err)
 
@@ -1081,6 +1085,7 @@ func TestKeyFileSizeLimit(t *testing.T) {
 	require.NoError(t, err)
 
 	orch := New(tmpDir)
+	orch.SetIncludeKeyFiles(true) // Enable key files for this test
 	ctx, err := orch.BuildIterationContext(1, "", nil)
 	require.NoError(t, err)
 
@@ -1101,8 +1106,9 @@ func TestKeyFileSizeLimitCustom(t *testing.T) {
 	err = os.WriteFile(filepath.Join(tmpDir, "prd.json"), []byte(`{"name": "Test"}`), 0644)
 	require.NoError(t, err)
 
-	// Default (50KB limit) should include it
+	// Enable key files and check (50KB limit) should include it
 	orch := New(tmpDir)
+	orch.SetIncludeKeyFiles(true) // Enable key files for this test
 	ctx, err := orch.BuildIterationContext(1, "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, mediumContent, ctx.KeyFiles["README.md"])
@@ -1174,6 +1180,7 @@ func TestKeyFilesInPrompt(t *testing.T) {
 	require.NoError(t, err)
 
 	orch := New(tmpDir)
+	orch.SetIncludeKeyFiles(true) // Enable key files for this test
 	ctx, err := orch.BuildIterationContext(1, "", nil)
 	require.NoError(t, err)
 
@@ -1298,6 +1305,7 @@ func TestCmdMainGoPattern(t *testing.T) {
 	require.NoError(t, err)
 
 	orch := New(tmpDir)
+	orch.SetIncludeKeyFiles(true) // Enable key files for this test
 	ctx, err := orch.BuildIterationContext(1, "", nil)
 	require.NoError(t, err)
 
