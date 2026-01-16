@@ -1324,13 +1324,13 @@ func TestDefaultToolConfig(t *testing.T) {
 	assert.NotEmpty(t, config.AllowedBashCommands)
 
 	// Verify default bash commands
-	expectedCommands := []string{"go", "npm", "yarn", "pnpm", "cargo", "python", "pytest", "git", "make"}
+	expectedCommands := []string{"go", "npm", "yarn", "pnpm", "cargo", "python", "pytest", "git", "make", "php", "composer", "./vendor/bin/pest", "./vendor/bin/phpunit", "vendor/bin/pest", "vendor/bin/phpunit"}
 	assert.Equal(t, expectedCommands, config.AllowedBashCommands)
 }
 
 func TestDefaultAllowedBashCommandsConstant(t *testing.T) {
 	// Verify the constant contains expected commands
-	expectedCommands := []string{"go", "npm", "yarn", "pnpm", "cargo", "python", "pytest", "git", "make"}
+	expectedCommands := []string{"go", "npm", "yarn", "pnpm", "cargo", "python", "pytest", "git", "make", "php", "composer", "./vendor/bin/pest", "./vendor/bin/phpunit", "vendor/bin/pest", "vendor/bin/phpunit"}
 
 	assert.Equal(t, len(expectedCommands), len(DefaultAllowedBashCommands))
 	for i, expected := range expectedCommands {

@@ -260,15 +260,21 @@ type ToolConfig struct {
 
 // DefaultAllowedBashCommands is the default list of safe bash command prefixes
 var DefaultAllowedBashCommands = []string{
-	"go",     // Go toolchain (go build, go test, go run, etc.)
-	"npm",    // Node.js package manager
-	"yarn",   // Alternative Node.js package manager
-	"pnpm",   // Alternative Node.js package manager
-	"cargo",  // Rust package manager and build tool
-	"python", // Python interpreter
-	"pytest", // Python test framework
-	"git",    // Git version control
-	"make",   // Make build tool
+	"go",                   // Go toolchain (go build, go test, go run, etc.)
+	"npm",                  // Node.js package manager
+	"yarn",                 // Alternative Node.js package manager
+	"pnpm",                 // Alternative Node.js package manager
+	"cargo",                // Rust package manager and build tool
+	"python",               // Python interpreter
+	"pytest",               // Python test framework
+	"git",                  // Git version control
+	"make",                 // Make build tool
+	"php",                  // PHP interpreter (php artisan, etc.)
+	"composer",             // PHP package manager
+	"./vendor/bin/pest",    // Laravel/PHP Pest test framework
+	"./vendor/bin/phpunit", // PHP PHPUnit test framework
+	"vendor/bin/pest",      // Laravel/PHP Pest (without ./)
+	"vendor/bin/phpunit",   // PHP PHPUnit (without ./)
 }
 
 // DefaultToolConfig returns the default tool configuration
