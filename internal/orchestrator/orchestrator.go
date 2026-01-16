@@ -42,7 +42,6 @@ type Orchestrator struct {
 	tagger         *tagging.Tagger
 	parallel       *ParallelExecutor
 	snapshotConfig SnapshotConfig
-	toolConfig     ToolConfig
 
 	// Progress tracking
 	progressWriter *progress.Writer
@@ -73,7 +72,6 @@ func New(workDir string) *Orchestrator {
 		tagger:         tagging.New(workDir),
 		parallel:       NewParallelExecutor(workDir),
 		snapshotConfig: DefaultSnapshotConfig(),
-		toolConfig:     DefaultToolConfig(),
 		progressWriter: progress.NewWriter(workDir),
 		session: &Session{
 			ID:       uuid.New().String(),
@@ -224,47 +222,6 @@ func (o *Orchestrator) SetMaxFileSizeBytes(size int64) *Orchestrator {
 // SetIncludeKeyFiles enables or disables automatic key file inclusion
 func (o *Orchestrator) SetIncludeKeyFiles(include bool) *Orchestrator {
 	o.snapshotConfig.IncludeKeyFiles = include
-	return o
-}
-
-// SetToolConfig sets the tool configuration
-func (o *Orchestrator) SetToolConfig(config ToolConfig) *Orchestrator {
-	o.toolConfig = config
-	return o
-}
-
-// GetToolConfig returns the current tool configuration
-func (o *Orchestrator) GetToolConfig() ToolConfig {
-	return o.toolConfig
-}
-
-// SetAllowedBashCommands sets the list of allowed bash command prefixes
-func (o *Orchestrator) SetAllowedBashCommands(commands []string) *Orchestrator {
-	o.toolConfig.AllowedBashCommands = commands
-	return o
-}
-
-// AddAllowedBashCommand adds a bash command to the allowed list
-func (o *Orchestrator) AddAllowedBashCommand(command string) *Orchestrator {
-	o.toolConfig.AllowedBashCommands = append(o.toolConfig.AllowedBashCommands, command)
-	return o
-}
-
-// SetAllowRead enables or disables the Read tool
-func (o *Orchestrator) SetAllowRead(allow bool) *Orchestrator {
-	o.toolConfig.AllowRead = allow
-	return o
-}
-
-// SetAllowWrite enables or disables the Write tool
-func (o *Orchestrator) SetAllowWrite(allow bool) *Orchestrator {
-	o.toolConfig.AllowWrite = allow
-	return o
-}
-
-// SetAllowEdit enables or disables the Edit tool
-func (o *Orchestrator) SetAllowEdit(allow bool) *Orchestrator {
-	o.toolConfig.AllowEdit = allow
 	return o
 }
 
@@ -783,14 +740,10 @@ func (o *Orchestrator) RunFeatureLoop(ctx context.Context, feature *FeatureConte
 func (o *Orchestrator) runClaudeWithOutput(ctx context.Context, prompt string) (string, error) {
 	o.debugLog("Running Claude with prompt (%d chars)", len(prompt))
 
-	// Build the allowed tools flag from configuration
-	allowedTools := o.toolConfig.BuildAllowedToolsFlag()
-	o.debugLog("Using allowed tools: %s", allowedTools)
-
 	// Pass prompt via stdin to avoid "argument list too long" error for large prompts
+	// Use --dangerously-skip-permissions to run in full auto-approve mode
 	cmd := exec.CommandContext(ctx, o.claudePath,
-		"--permission-mode", "acceptEdits",
-		"--allowedTools", allowedTools,
+		"--dangerously-skip-permissions",
 		"--output-format", "stream-json",
 		"--verbose",
 		"-p", "-", // Read prompt from stdin
@@ -1037,17 +990,11 @@ func parseValidation(output string) ValidationResult {
 func (o *Orchestrator) runClaudeInteractive(ctx context.Context, prompt string) error {
 	o.debugLog("Starting Claude with prompt (%d chars)", len(prompt))
 
-	// Build the allowed tools flag from configuration
-	// - stream-json requires --verbose flag
-	// - allowedTools grants permission for specific tools without prompting
-	// - By default we allow: Read, Write, Edit, Bash for common dev commands (go, npm, git, etc.)
-	allowedTools := o.toolConfig.BuildAllowedToolsFlag()
-	o.debugLog("Using allowed tools: %s", allowedTools)
-
 	// Pass prompt via stdin to avoid "argument list too long" error for large prompts
+	// Use --dangerously-skip-permissions to run in full auto-approve mode
+	// Note: stream-json requires --verbose flag
 	cmd := exec.CommandContext(ctx, o.claudePath,
-		"--permission-mode", "acceptEdits",
-		"--allowedTools", allowedTools,
+		"--dangerously-skip-permissions",
 		"--output-format", "stream-json",
 		"--verbose",
 		"-p", "-", // Read prompt from stdin

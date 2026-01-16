@@ -104,10 +104,10 @@ func (r *Runner) Run(ctx context.Context, prompt string) error {
 	defer cancel()
 
 	// Build the command
-	// Using claude CLI with permission mode to accept edits automatically
+	// Use --dangerously-skip-permissions to run in full auto-approve mode
 	// Pass prompt via stdin to avoid "argument list too long" error for large prompts
 	r.cmd = exec.CommandContext(ctx, r.claudePath,
-		"--permission-mode", "acceptEdits",
+		"--dangerously-skip-permissions",
 		"-p", "-", // Read prompt from stdin
 	)
 	r.cmd.Dir = r.workDir
@@ -186,10 +186,10 @@ func (r *Runner) RunInteractive(ctx context.Context, systemPrompt string) error 
 	// - Use --system-prompt to give Claude the planning instructions
 	// - Pass an initial user message to start the conversation
 	// - DO NOT use -p/--print so it stays interactive
-	// - Use --allowedTools to let Claude write files
+	// - Use --dangerously-skip-permissions to run in full auto-approve mode
 	r.cmd = exec.CommandContext(ctx, r.claudePath,
+		"--dangerously-skip-permissions",
 		"--system-prompt", systemPrompt,
-		"--allowedTools", "Write,Edit,Read,Bash",
 		"What are you building? Tell me about your project - what's the main purpose, who will use it, and what problem does it solve?",
 	)
 	r.cmd.Dir = r.workDir
